@@ -1,14 +1,39 @@
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
+import {
+  ref,
+  onValue,
+  set,
+  update,
+  runTransaction,
+  get,
+  child,
+} from "firebase/database";
 import { db } from "./firebase";
-import { ref, onValue, set, update } from "firebase/database";
 
-// ========== 全局配置 ==========
+/**
+ * =========================
+ * PRD v1 - Realtime Quiz App
+ * =========================
+ * - Identity: participantId persisted in localStorage
+ * - New user: unique userName (case-insensitive), generate fixed recoveryCode
+ * - Recovery: by recoveryCode (fixed, one per user)
+ * - Quiz: one submission per user per question (keyed object)
+ * - Natural end: running + currentQuestionIndex >= totalQuestions -> Thanks page
+ * - Stop: show Closed page + leaderboard (read-only) + back to home
+ * - Exit: 2-step confirm; step2 shows recovery code; clears localStorage
+ * - Admin: full question list + controls + live submissions (duration focus) + leaderboard
+ * - Leaderboard: accuracy desc, totalTime asc; unanswered penalty 120s per question
+ */
+
+// ===== Config =====
 const ADMIN_PASSWORD = "ennebei";
-const LS_PARTICIPANT_ID = "quiz_participant_id"; // LocalStorage Key
+const LS_PARTICIPANT_ID = "quiz_participant_id";
+const UNANSWERED_PENALTY_MS = 120000;
 
-// ========== 题目数据 ==========
+// ===== Question Bank =====
+// 你可替换为你的题库；管理员界面会展示“完整题目”。
 const allQuestions = [
   {
     id: 1,
@@ -56,623 +81,545 @@ const allQuestions = [
   },
 ];
 
-// ========== 工具函数 ==========
+// ===== Utils =====
+function now() {
+  return Date.now();
+}
+
 function generateId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  return now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
 function generateRecoveryCode() {
+  // avoid confusing chars
   const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
   let out = "";
   for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
 }
 
+function normalizeName(name) {
+  return name.trim();
+}
+
+function normalizeNameKey(name) {
+  return normalizeName(name).toLowerCase();
+}
+
+function normalizeRecoveryCode(code) {
+  return (code || "").trim().toUpperCase();
+}
+
 function formatMs(ms) {
+  if (ms == null || Number.isNaN(ms)) return "-";
   const s = Math.floor(ms / 1000);
   const d = Math.floor((ms % 1000) / 100);
   return `${s}.${d}s`;
 }
 
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // fallback
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// ===== DB initial data (keyed objects) =====
 const initialData = {
   quizStatus: "running",
+  stoppedAt: null,
   currentQuestionIndex: 0,
-  registeredUsers: [],
-  submissions: [],
-  questionStartTimes: {},
+
+  users: {}, // {participantId:{userName,recoveryCode,createdAt}}
+  userNameIndex: {}, // {lowerName: participantId}
+  recoveryCodeIndex: {}, // {recoveryCode: participantId}
+
+  startTimes: {}, // {pid_qid: startTimeMs}
+  submissions: {}, // {pid_qid: submission}
 };
 
-// ========== 主应用 ==========
+// ===== Leaderboard computation =====
+function computeLeaderboard({ users, submissions }, totalQuestions) {
+  const userEntries = Object.entries(users || {}).map(([participantId, u]) => ({
+    participantId,
+    userName: u.userName,
+    recoveryCode: u.recoveryCode,
+    createdAt: u.createdAt || 0,
+  }));
+
+  const byKey = submissions || {};
+  const questions = allQuestions.slice(0, totalQuestions);
+
+  const rows = userEntries.map((u) => {
+    let answeredCount = 0;
+    let correctCount = 0;
+    let sumAnsweredDuration = 0;
+
+    for (const q of questions) {
+      const key = `${u.participantId}_${q.id}`;
+      const sub = byKey[key];
+      if (sub) {
+        answeredCount += 1;
+        sumAnsweredDuration += Number(sub.duration || 0);
+        if (sub.isCorrect) correctCount += 1;
+      }
+    }
+
+    const unanswered = totalQuestions - answeredCount;
+    const totalTime = sumAnsweredDuration + unanswered * UNANSWERED_PENALTY_MS;
+    const accuracy = totalQuestions > 0 ? correctCount / totalQuestions : 0;
+
+    return {
+      participantId: u.participantId,
+      userName: u.userName,
+      createdAt: u.createdAt,
+      answeredCount,
+      unansweredCount: unanswered,
+      correctCount,
+      accuracy,
+      totalTime,
+    };
+  });
+
+  rows.sort((a, b) => {
+    if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
+    if (a.totalTime !== b.totalTime) return a.totalTime - b.totalTime;
+    return (a.createdAt || 0) - (b.createdAt || 0);
+  });
+
+  // assign ranks (dense rank)
+  let rank = 0;
+  let lastKey = null;
+  const ranked = rows.map((r, idx) => {
+    const k = `${r.accuracy}-${r.totalTime}`;
+    if (k !== lastKey) {
+      rank = idx + 1;
+      lastKey = k;
+    }
+    return { ...r, rank };
+  });
+
+  return ranked;
+}
+
+// ===== App =====
 function App() {
-  const [page, setPage] = useState("entry");
+  const totalQuestions = allQuestions.length;
+
   const [data, setData] = useState(initialData);
   const [isConnected, setIsConnected] = useState(false);
-  
-  // 当前用户状态
-  const [participantId, setParticipantId] = useState("");
-  const [currentUserName, setCurrentUserName] = useState("");
-  
-  // 弹窗状态
-  const [showAdminModal, setShowAdminModal] = useState(false);
-  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
-  const [newRecoveryCode, setNewRecoveryCode] = useState("");
 
-  // 1. 初始化：连接 Firebase
+  const [mode, setMode] = useState("participant"); // participant | admin
+  const [participantId, setParticipantId] = useState("");
+  const [user, setUser] = useState(null); // {userName,recoveryCode,...}
+
+  // participant navigation
+  const [participantScreen, setParticipantScreen] = useState("entry"); // entry | register
+
+  // modals
+  const [adminLoginOpen, setAdminLoginOpen] = useState(false);
+  const [recoveryModalOpen, setRecoveryModalOpen] = useState(false);
+  const [recoveryModalCode, setRecoveryModalCode] = useState("");
+  const [exitConfirm1Open, setExitConfirm1Open] = useState(false);
+  const [exitConfirm2Open, setExitConfirm2Open] = useState(false);
+
+  // ===== Subscribe DB root =====
   useEffect(() => {
-    const dataRef = ref(db, "/");
-    const unsubscribe = onValue(dataRef, (snapshot) => {
-      const val = snapshot.val();
-      if (val) {
-        setData({
-          quizStatus: val.quizStatus || "running",
-          currentQuestionIndex: val.currentQuestionIndex || 0,
-          registeredUsers: val.registeredUsers || [],
-          submissions: val.submissions || [],
-          questionStartTimes: val.questionStartTimes || {},
-        });
-      } else {
-        set(dataRef, initialData);
+    const rootRef = ref(db, "/");
+    const unsub = onValue(rootRef, (snap) => {
+      const val = snap.val();
+      if (!val) {
+        set(rootRef, initialData);
+        setData(initialData);
+        setIsConnected(true);
+        return;
       }
+      setData({
+        quizStatus: val.quizStatus ?? "running",
+        stoppedAt: val.stoppedAt ?? null,
+        currentQuestionIndex: val.currentQuestionIndex ?? 0,
+
+        users: val.users ?? {},
+        userNameIndex: val.userNameIndex ?? {},
+        recoveryCodeIndex: val.recoveryCodeIndex ?? {},
+
+        startTimes: val.startTimes ?? {},
+        submissions: val.submissions ?? {},
+      });
       setIsConnected(true);
     });
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
-  // 2. 身份识别：检查 LocalStorage
-  // 只要本地有 ID，就自动登录，绝不生成新 ID
+  // ===== Auto restore identity from localStorage =====
   useEffect(() => {
-    const savedId = localStorage.getItem(LS_PARTICIPANT_ID);
-    if (!savedId) return;
+    const saved = localStorage.getItem(LS_PARTICIPANT_ID);
+    if (!saved) return;
 
-    // 等待 data 加载完毕
-    if (data.registeredUsers && data.registeredUsers.length > 0) {
-      const existingUser = data.registeredUsers.find(u => u.participantId === savedId);
-      if (existingUser) {
-        setParticipantId(existingUser.participantId);
-        setCurrentUserName(existingUser.userName);
-        // 如果还在入口页，且没在看其他弹窗，直接进入答题页
-        if (page === "entry" || page === "register") {
-          setPage("quiz");
-        }
+    const u = (data.users || {})[saved];
+    if (u) {
+      setParticipantId(saved);
+      setUser({ participantId: saved, ...u });
+    } else {
+      // DB reset or user removed
+      localStorage.removeItem(LS_PARTICIPANT_ID);
+      setParticipantId("");
+      setUser(null);
+    }
+  }, [data.users]);
+
+  // ===== Derived: system pages =====
+  const quizStatus = data.quizStatus;
+  const isStopped = quizStatus === "stopped";
+  const isNaturalEnded = quizStatus === "running" && data.currentQuestionIndex >= totalQuestions;
+
+  const currentQuestion =
+    data.currentQuestionIndex >= 0 && data.currentQuestionIndex < totalQuestions
+      ? allQuestions[data.currentQuestionIndex]
+      : null;
+
+  const leaderboard = useMemo(() => {
+    return computeLeaderboard({ users: data.users, submissions: data.submissions }, totalQuestions);
+  }, [data.users, data.submissions, totalQuestions]);
+
+  const myRow = useMemo(() => {
+    if (!participantId) return null;
+    return leaderboard.find((r) => r.participantId === participantId) || null;
+  }, [leaderboard, participantId]);
+
+  // ===== Participant effective view =====
+  const participantView = useMemo(() => {
+    if (mode !== "participant") return null;
+
+    if (isStopped) return { type: "closed" };
+    if (isNaturalEnded) return { type: "thanks" };
+
+    if (user && participantId) return { type: "quiz" };
+    return { type: participantScreen }; // entry or register
+  }, [mode, isStopped, isNaturalEnded, user, participantId, participantScreen]);
+
+  // ===== Identity: register/recover =====
+  async function reserveRecoveryCodeUnique() {
+    // reserve in /recoveryCodeIndex/{code} by transaction (null -> "RESERVED")
+    for (let i = 0; i < 12; i++) {
+      const code = generateRecoveryCode();
+      const idxRef = ref(db, `/recoveryCodeIndex/${code}`);
+      const tx = await runTransaction(idxRef, (cur) => {
+        if (cur === null) return "__RESERVED__";
+        return; // abort
+      });
+      if (tx.committed && tx.snapshot.val() === "__RESERVED__") {
+        return code;
       }
     }
-  }, [data.registeredUsers, page]);
-
-  // ========== 核心逻辑：用户加入/恢复 ==========
-  const handleJoin = async ({ userName, recoveryCode }) => {
-    const trimmedName = userName.trim();
-    if (!trimmedName) return { ok: false, error: "请输入昵称 Please enter nickname" };
-
-    const inputCode = recoveryCode ? recoveryCode.trim().toUpperCase() : "";
-
-    // A. 使用恢复码找回旧账号 (优先级最高)
-    if (inputCode) {
-      const foundUser = (data.registeredUsers || []).find(u => u.recoveryCode === inputCode);
-      if (!foundUser) return { ok: false, error: "恢复码无效 Invalid recovery code" };
-
-      // 找回成功：写入本地，恢复身份
-      localStorage.setItem(LS_PARTICIPANT_ID, foundUser.participantId);
-      setParticipantId(foundUser.participantId);
-      setCurrentUserName(foundUser.userName); 
-      setPage("quiz");
-      return { ok: true };
-    }
-
-    // B. 新用户注册 - 【检查重名】
-    const nameExists = (data.registeredUsers || []).some(
-      u => u.userName.toLowerCase() === trimmedName.toLowerCase()
-    );
-
-    if (nameExists) {
-      return { ok: false, error: "该昵称已被使用，请换一个。\nNickname already taken." };
-    }
-
-    // 生成永久 ID 和 恢复码
-    const newId = generateId();
-    const newCode = generateRecoveryCode();
-    
-    const newUser = {
-      participantId: newId,
-      userName: trimmedName,
-      recoveryCode: newCode,
-      createdAt: Date.now(),
-    };
-
-    const updatedUsers = [...(data.registeredUsers || []), newUser];
-    await update(ref(db, "/"), { registeredUsers: updatedUsers });
-
-    // 写入本地
-    localStorage.setItem(LS_PARTICIPANT_ID, newId);
-    setParticipantId(newId);
-    setCurrentUserName(trimmedName);
-    
-    // 注册完先弹窗显示 Code
-    setNewRecoveryCode(newCode);
-    setShowRecoveryModal(true);
-    
-    return { ok: true };
-  };
-
-  // 关闭恢复码弹窗 -> 进入答题
-  const handleCloseRecoveryModal = () => {
-    setShowRecoveryModal(false);
-    setPage("quiz");
-  };
-
-  // ========== 核心逻辑：答题计时与提交 ==========
-  const currentQuestion = allQuestions[data.currentQuestionIndex];
-
-  // 记录开始时间（仅当进入 Quiz 页且题目未回答时）
-  useEffect(() => {
-    if (page !== "quiz" || !participantId || !currentQuestion) return;
-    
-    const key = `${participantId}_${currentQuestion.id}`;
-    
-    // 检查是否已提交过，提交过就不再重新计时
-    const isDone = (data.submissions || []).some(
-      s => s.participantId === participantId && s.questionId === currentQuestion.id
-    );
-    if (isDone) return;
-
-    // 如果还没有开始时间，则写入
-    if (!data.questionStartTimes[key]) {
-      update(ref(db, `/questionStartTimes`), { [key]: Date.now() });
-    }
-  }, [page, participantId, currentQuestion, data.submissions, data.questionStartTimes]);
-
-  const handleSubmit = async (answer) => {
-    // 防重复提交：再次检查 DB 中是否已有记录
-    const isAlreadySubmitted = (data.submissions || []).some(
-      s => s.participantId === participantId && s.questionId === currentQuestion.id
-    );
-    if (isAlreadySubmitted) return;
-
-    const key = `${participantId}_${currentQuestion.id}`;
-    const startTime = data.questionStartTimes[key] || Date.now();
-    const submitTime = Date.now();
-    const duration = submitTime - startTime;
-
-    const newSub = {
-      id: generateId(),
-      participantId,
-      userName: currentUserName,
-      questionId: currentQuestion.id,
-      answer,
-      isCorrect: answer === currentQuestion.correctAnswer,
-      duration,
-      submitTime,
-    };
-
-    const newSubmissions = [...(data.submissions || []), newSub];
-    await update(ref(db, "/"), { submissions: newSubmissions });
-  };
-
-  // ========== 管理员操作 ==========
-  const handleAdminAuth = (pwd) => {
-    if (pwd === ADMIN_PASSWORD) {
-      setShowAdminModal(false);
-      setPage("admin");
-    } else {
-      alert("密码错误 Error");
-    }
-  };
-
-  const handleNextQ = async () => {
-    if (data.currentQuestionIndex < allQuestions.length - 1) {
-      await update(ref(db, "/"), { currentQuestionIndex: data.currentQuestionIndex + 1 });
-    }
-  };
-
-  const handleStop = async () => {
-    if (window.confirm("停止问卷？Stop quiz?")) {
-      await update(ref(db, "/"), { quizStatus: "stopped" });
-    }
-  };
-
-  const handleReset = async () => {
-    if (window.confirm("⚠️ 危险：重置所有数据？Reset ALL data?")) {
-      await set(ref(db, "/"), initialData);
-      localStorage.removeItem(LS_PARTICIPANT_ID);
-      window.location.reload();
-    }
-  };
-
-  // 渲染分发
-  return (
-    <div className="min-h-screen bg-slate-900 text-white font-sans selection:bg-indigo-500 selection:text-white">
-      {/* 恢复码弹窗（注册成功后显示） */}
-      {showRecoveryModal && (
-        <RecoveryCodeModal code={newRecoveryCode} onClose={handleCloseRecoveryModal} />
-      )}
-
-      {/* 管理员密码弹窗 */}
-      {showAdminModal && (
-        <PasswordModal onClose={() => setShowAdminModal(false)} onSubmit={handleAdminAuth} />
-      )}
-
-      {/* 页面路由 */}
-      {page === "entry" && (
-        <EntryPage 
-          isConnected={isConnected} 
-          onStart={() => setPage("register")} 
-          onAdmin={() => setShowAdminModal(true)}
-          currentUser={participantId ? currentUserName : null}
-          onContinue={() => setPage("quiz")} // 自动识别的用户直接进
-        />
-      )}
-
-      {page === "register" && (
-        <RegisterPage 
-          onJoin={handleJoin} 
-          onBack={() => setPage("entry")} 
-        />
-      )}
-
-      {page === "quiz" && (
-        <QuizPage 
-          data={data} 
-          participantId={participantId} 
-          currentUserName={currentUserName} 
-          currentQuestion={currentQuestion}
-          onSubmit={handleSubmit}
-          onBack={() => setPage("entry")}
-        />
-      )}
-
-      {page === "admin" && (
-        <AdminPage 
-          data={data} 
-          onNext={handleNextQ}
-          onStop={handleStop}
-          onReset={handleReset}
-          onBack={() => setPage("entry")}
-        />
-      )}
-    </div>
-  );
-}
-
-// ========== 子组件：恢复码弹窗 (新) ==========
-function RecoveryCodeModal({ code, onClose }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6">
-      <div className="bg-slate-800 border border-slate-600 rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl animate-in fade-in zoom-in duration-300">
-        <div className="text-4xl mb-4">🔐</div>
-        <h3 className="text-2xl font-bold text-white mb-2">保存你的恢复码</h3>
-        <p className="text-slate-400 mb-6 text-sm">Save your Recovery Code</p>
-        
-        <div className="bg-slate-950 rounded-xl p-4 mb-2 border border-indigo-500/30">
-          <p className="text-3xl font-mono font-bold text-indigo-400 tracking-widest select-all">{code}</p>
-        </div>
-        <p className="text-slate-500 text-xs mb-8">换设备或意外退出时，用它找回身份</p>
-        
-        <button 
-          onClick={onClose}
-          className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all"
-        >
-          我记住了 I Saved It
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ========== 子组件：入口页 ==========
-function EntryPage({ isConnected, onStart, onAdmin, currentUser, onContinue }) {
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
-      <div className="mb-8 flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-400">
-        <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-yellow-500 animate-pulse"}`}></span>
-        {isConnected ? "System Online" : "Connecting..."}
-      </div>
-
-      <div className="text-center mb-12">
-        <h1 className="text-5xl font-bold text-white mb-4 tracking-tight">Real-time Quiz</h1>
-        <p className="text-slate-400 text-lg">实时互动答题系统</p>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-4 w-full max-w-2xl">
-        {currentUser ? (
-          <button onClick={onContinue} className="bg-indigo-600 hover:bg-indigo-500 text-white p-8 rounded-2xl text-left transition-all border border-indigo-500 shadow-lg shadow-indigo-900/20 group">
-            <div className="text-3xl mb-4">👋</div>
-            <h2 className="text-2xl font-bold mb-1">欢迎回来, {currentUser}</h2>
-            <p className="text-indigo-200">点击继续答题 Continue Quiz</p>
-            <div className="mt-4 flex items-center text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity">进入 Enter →</div>
-          </button>
-        ) : (
-          <button onClick={onStart} className="bg-slate-800 hover:bg-slate-700 text-white p-8 rounded-2xl text-left transition-all border border-slate-700 hover:border-indigo-500 group">
-            <div className="text-3xl mb-4">👤</div>
-            <h2 className="text-2xl font-bold mb-1">参与答题</h2>
-            <p className="text-slate-400">Join Quiz</p>
-            <div className="mt-4 flex items-center text-indigo-400 text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity">进入 Enter →</div>
-          </button>
-        )}
-
-        <button onClick={onAdmin} className="bg-slate-800 hover:bg-slate-700 text-white p-8 rounded-2xl text-left transition-all border border-slate-700 hover:border-purple-500 group">
-          <div className="text-3xl mb-4">📊</div>
-          <h2 className="text-2xl font-bold mb-1">管理员</h2>
-          <p className="text-slate-400">Admin Dashboard</p>
-          <div className="mt-4 flex items-center text-purple-400 text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity">进入 Enter →</div>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ========== 子组件：注册页 ==========
-function RegisterPage({ onJoin, onBack }) {
-  const [name, setName] = useState("");
-  const [code, setCode] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async () => {
-    setLoading(true);
-    const res = await onJoin({ userName: name, recoveryCode: code });
-    setLoading(false);
-    if (!res.ok) {
-      setError(res.error);
-    }
-  };
-
-  return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-slate-800 rounded-2xl p-8 border border-slate-700">
-        <button onClick={onBack} className="text-slate-400 mb-6 hover:text-white">← Back</button>
-        <h2 className="text-2xl font-bold text-white mb-6">输入信息 Enter Info</h2>
-        
-        <div className="space-y-4">
-          <div>
-            <label className="text-slate-400 text-sm block mb-2">昵称 Nickname</label>
-            <input 
-              value={name} onChange={e => { setName(e.target.value); setError(""); }}
-              className="w-full bg-slate-900 border border-slate-600 rounded-xl p-4 text-white focus:border-indigo-500 outline-none"
-              placeholder="e.g. SHI"
-            />
-          </div>
-          <div>
-            <label className="text-slate-400 text-sm block mb-2">恢复码 Recovery Code (选填)</label>
-            <input 
-              value={code} onChange={e => { setCode(e.target.value); setError(""); }}
-              className="w-full bg-slate-900 border border-slate-600 rounded-xl p-4 text-white focus:border-indigo-500 outline-none font-mono"
-              placeholder="仅旧用户填写 Only for returning users"
-            />
-          </div>
-
-          {error && <p className="text-red-400 text-sm">{error}</p>}
-
-          <button 
-            onClick={handleSubmit} 
-            disabled={loading || !name}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-xl mt-4"
-          >
-            {loading ? "..." : "进入 Enter"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ========== 子组件：答题页 ==========
-function QuizPage({ data, participantId, currentUserName, currentQuestion, onSubmit, onBack }) {
-  const [selected, setSelected] = useState(null);
-  const [elapsed, setElapsed] = useState(0);
-
-  // 检查当前题是否已答
-  const mySubmission = (data.submissions || []).find(
-    s => s.participantId === participantId && s.questionId === currentQuestion?.id
-  );
-  
-  const hasSubmitted = !!mySubmission;
-
-  // 计时器逻辑
-  useEffect(() => {
-    if (!currentQuestion || hasSubmitted || data.quizStatus === "stopped") return;
-    
-    const key = `${participantId}_${currentQuestion.id}`;
-    const startTime = data.questionStartTimes[key];
-    
-    if (startTime) {
-      const timer = setInterval(() => {
-        setElapsed(Date.now() - startTime);
-      }, 100);
-      return () => clearInterval(timer);
-    }
-  }, [currentQuestion, hasSubmitted, participantId, data.questionStartTimes, data.quizStatus]);
-
-  useEffect(() => {
-    setSelected(null);
-    setElapsed(0);
-  }, [data.currentQuestionIndex]);
-
-  // A. 问卷停止或全部完成
-  if (data.quizStatus === "stopped" || !currentQuestion) {
-    // 简单计算个人成绩
-    const mySubs = (data.submissions || []).filter(s => s.participantId === participantId);
-    const correctCount = mySubs.filter(s => s.isCorrect).length;
-
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6 text-center">
-        <div>
-          <div className="text-6xl mb-4">🏁</div>
-          <h2 className="text-3xl font-bold mb-2">
-            {data.quizStatus === "stopped" ? "已停止 Stopped" : "全部完成 Completed"}
-          </h2>
-          <div className="bg-slate-800 p-6 rounded-2xl mt-6 border border-slate-700">
-            <p className="text-slate-400 text-sm uppercase tracking-wider">Your Score</p>
-            <div className="text-4xl font-bold text-white mt-2">{correctCount} <span className="text-lg text-slate-500">/ {allQuestions.length}</span></div>
-          </div>
-          <button onClick={onBack} className="mt-8 text-slate-400 hover:text-white">Back to Home</button>
-        </div>
-      </div>
-    );
+    throw new Error("Failed to reserve recovery code. Please retry.");
   }
 
-  // B. 正常答题
+  async function registerNewUser(userNameRaw) {
+    const name = normalizeName(userNameRaw);
+    const lower = normalizeNameKey(name);
+    if (!name) return { ok: false, error: "请输入昵称 / Please enter a nickname." };
+
+    // reserve username index by transaction
+    const userNameIdxRef = ref(db, `/userNameIndex/${lower}`);
+    const desiredId = generateId();
+
+    const userNameTx = await runTransaction(userNameIdxRef, (cur) => {
+      if (cur === null) return desiredId;
+      return; // abort if taken
+    });
+
+    if (!userNameTx.committed) {
+      return { ok: false, error: "该昵称已被使用，请换一个 / Nickname already taken." };
+    }
+
+    // reserve unique recovery code, then finalize user record & index
+    let code;
+    try {
+      code = await reserveRecoveryCodeUnique();
+    } catch (e) {
+      // rollback username reservation best-effort (only if still points to desiredId)
+      await runTransaction(userNameIdxRef, (cur) => {
+        if (cur === desiredId) return null;
+        return cur;
+      });
+      return { ok: false, error: "系统繁忙，请重试 / Please retry." };
+    }
+
+    const createdAt = now();
+    const userObj = { userName: name, recoveryCode: code, createdAt };
+
+    // finalize: set users/{id} and recoveryCodeIndex/{code} = id
+    // also ensure userNameIndex remains desiredId (already)
+    await update(ref(db, "/"), {
+      [`users/${desiredId}`]: userObj,
+      [`recoveryCodeIndex/${code}`]: desiredId,
+    });
+
+    // persist to localStorage
+    localStorage.setItem(LS_PARTICIPANT_ID, desiredId);
+    setParticipantId(desiredId);
+    setUser({ participantId: desiredId, ...userObj });
+
+    // show recovery modal (must confirm saved)
+    setRecoveryModalCode(code);
+    setRecoveryModalOpen(true);
+
+    return { ok: true };
+  }
+
+  async function recoverByCode(codeRaw) {
+    const code = normalizeRecoveryCode(codeRaw);
+    if (!code) return { ok: false, error: "请输入恢复码 / Please enter recovery code." };
+
+    const pid = (data.recoveryCodeIndex || {})[code];
+    if (!pid) return { ok: false, error: "恢复码无效 / Invalid recovery code." };
+
+    const u = (data.users || {})[pid];
+    if (!u) return { ok: false, error: "用户不存在或已被重置 / User not found." };
+
+    localStorage.setItem(LS_PARTICIPANT_ID, pid);
+    setParticipantId(pid);
+    setUser({ participantId: pid, ...u });
+    return { ok: true };
+  }
+
+  // ===== Exit flow =====
+  function openExitFlow() {
+    setExitConfirm1Open(true);
+  }
+  function confirmExitStep1() {
+    setExitConfirm1Open(false);
+    setExitConfirm2Open(true);
+  }
+  function confirmExitFinal() {
+    setExitConfirm2Open(false);
+    localStorage.removeItem(LS_PARTICIPANT_ID);
+    setParticipantId("");
+    setUser(null);
+    setParticipantScreen("entry");
+    setMode("participant");
+  }
+
+  // ===== Quiz: start time =====
+  useEffect(() => {
+    if (mode !== "participant") return;
+    if (!user || !participantId) return;
+    if (isStopped || isNaturalEnded) return;
+    if (!currentQuestion) return;
+
+    const subKey = `${participantId}_${currentQuestion.id}`;
+    const alreadySubmitted = !!(data.submissions || {})[subKey];
+    if (alreadySubmitted) return;
+
+    const stKey = `${participantId}_${currentQuestion.id}`;
+    const stRef = ref(db, `/startTimes/${stKey}`);
+    runTransaction(stRef, (cur) => {
+      if (cur === null) return now();
+      return cur;
+    }).catch(() => {});
+  }, [
+    mode,
+    user,
+    participantId,
+    isStopped,
+    isNaturalEnded,
+    currentQuestion,
+    data.submissions,
+  ]);
+
+  // ===== Quiz: submit =====
+  async function submitAnswer(answerId) {
+    if (!user || !participantId) return { ok: false, error: "未登录 / Not logged in." };
+    if (data.quizStatus !== "running") return { ok: false, error: "问卷已关闭 / Closed." };
+    if (!currentQuestion) return { ok: false, error: "当前无题目 / No question." };
+
+    const q = currentQuestion;
+    const key = `${participantId}_${q.id}`;
+    const stKey = `${participantId}_${q.id}`;
+    const startTime = (data.startTimes || {})[stKey] || now();
+    const submitTime = now();
+    const duration = Math.max(0, submitTime - startTime);
+
+    const submission = {
+      participantId,
+      userName: user.userName,
+      questionId: q.id,
+      answer: answerId,
+      isCorrect: answerId === q.correctAnswer,
+      startTime,
+      submitTime,
+      duration,
+    };
+
+    // enforce one submission per key using transaction
+    const subRef = ref(db, `/submissions/${key}`);
+    const tx = await runTransaction(subRef, (cur) => {
+      if (cur === null) return submission;
+      return; // abort duplicate
+    });
+
+    if (!tx.committed) {
+      return { ok: false, error: "已提交过 / Already submitted." };
+    }
+    return { ok: true };
+  }
+
+  // ===== Admin controls =====
+  async function adminNextQuestion() {
+    if (data.quizStatus !== "running") return;
+    const next = Math.min(data.currentQuestionIndex + 1, totalQuestions);
+    await update(ref(db, "/"), { currentQuestionIndex: next });
+  }
+
+  async function adminStop() {
+    await update(ref(db, "/"), { quizStatus: "stopped", stoppedAt: now() });
+  }
+
+  async function adminReset() {
+    if (!window.confirm("确认重置所有数据？This will clear all data.")) return;
+    await set(ref(db, "/"), initialData);
+    // local users will be invalid; they will be prompted to register again.
+  }
+
+  // ===== Render =====
   return (
-    <div className="min-h-screen p-6 max-w-2xl mx-auto flex flex-col justify-center">
-      <div className="flex justify-between items-center mb-8">
-        <div className="flex items-center gap-2">
-           <span className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center font-bold text-sm">
-             {currentUserName ? currentUserName[0].toUpperCase() : "?"}
-           </span>
-           <span className="font-bold">{currentUserName}</span>
-        </div>
-        {!hasSubmitted && (
-          <div className="font-mono text-xl font-bold text-amber-400">
-            {formatMs(elapsed)}
-          </div>
-        )}
-      </div>
+    <div className="min-h-screen bg-slate-950 text-white">
+      <TopBar
+        isConnected={isConnected}
+        mode={mode}
+        onGoParticipant={() => setMode("participant")}
+        onOpenAdmin={() => setAdminLoginOpen(true)}
+        user={user}
+      />
 
-      <div className="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl relative overflow-hidden">
-        {/* 顶部进度条 */}
-        <div className="absolute top-0 left-0 h-1 bg-indigo-600 transition-all duration-500" style={{ width: `${((data.currentQuestionIndex + 1) / allQuestions.length) * 100}%` }}></div>
+      {adminLoginOpen && (
+        <AdminLoginModal
+          onClose={() => setAdminLoginOpen(false)}
+          onSuccess={() => {
+            setAdminLoginOpen(false);
+            setMode("admin");
+          }}
+        />
+      )}
 
-        <span className="inline-block bg-slate-700 text-slate-300 text-xs font-bold px-3 py-1 rounded-full mb-6">
-          QUESTION {data.currentQuestionIndex + 1} OF {allQuestions.length}
-        </span>
-        
-        <h2 className="text-xl md:text-2xl font-bold mb-8 whitespace-pre-line leading-relaxed">
-          {currentQuestion.question}
-        </h2>
+      {recoveryModalOpen && (
+        <RecoveryCodeModal
+          code={recoveryModalCode}
+          onClose={() => setRecoveryModalOpen(false)}
+        />
+      )}
 
-        <div className="space-y-3">
-          {currentQuestion.options.map(opt => {
-            // 样式逻辑
-            let btnClass = "w-full p-4 rounded-xl border-2 text-left font-medium transition-all flex items-center gap-3 ";
-            if (hasSubmitted) {
-              if (mySubmission.answer === opt.id) {
-                btnClass += mySubmission.isCorrect 
-                  ? "border-green-500 bg-green-500/10 text-green-400" 
-                  : "border-red-500 bg-red-500/10 text-red-400";
-              } else {
-                btnClass += "border-slate-700 opacity-50";
-              }
-            } else {
-              if (selected === opt.id) {
-                btnClass += "border-indigo-500 bg-indigo-500/10 text-indigo-300";
-              } else {
-                btnClass += "border-slate-700 hover:border-slate-600 hover:bg-slate-700/50";
-              }
-            }
+      {exitConfirm1Open && (
+        <ConfirmModal
+          title="确认退出？"
+          description="退出将清除本设备身份。重新进入需要恢复码找回。"
+          confirmText="继续退出"
+          cancelText="取消"
+          onCancel={() => setExitConfirm1Open(false)}
+          onConfirm={confirmExitStep1}
+        />
+      )}
 
-            return (
-              <button 
-                key={opt.id}
-                onClick={() => !hasSubmitted && setSelected(opt.id)}
-                disabled={hasSubmitted}
-                className={btnClass}
-              >
-                <span className="w-6 h-6 rounded-full border border-current flex items-center justify-center text-xs font-bold opacity-70">
-                  {opt.id}
-                </span>
-                {opt.text}
-              </button>
-            )
-          })}
-        </div>
+      {exitConfirm2Open && (
+        <ExitFinalModal
+          code={user?.recoveryCode || ""}
+          onCancel={() => setExitConfirm2Open(false)}
+          onConfirm={confirmExitFinal}
+        />
+      )}
 
-        {hasSubmitted ? (
-          <div className="mt-6 p-4 bg-slate-900/50 rounded-xl text-center text-slate-400 text-sm animate-pulse">
-            等待下一题 Waiting for next question...
-          </div>
-        ) : (
-          <button 
-            onClick={() => onSubmit(selected)}
-            disabled={!selected}
-            className="w-full mt-8 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-all shadow-lg shadow-indigo-900/50"
-          >
-            提交 Submit
-          </button>
-        )}
-      </div>
+      {mode === "admin" ? (
+        <AdminDashboard
+          data={data}
+          questions={allQuestions}
+          leaderboard={leaderboard}
+          onBack={() => setMode("participant")}
+          onNext={adminNextQuestion}
+          onStop={adminStop}
+          onReset={adminReset}
+        />
+      ) : (
+        <ParticipantShell
+          view={participantView}
+          data={data}
+          user={user}
+          participantId={participantId}
+          currentQuestion={currentQuestion}
+          questions={allQuestions}
+          leaderboard={leaderboard}
+          myRow={myRow}
+          onStart={() => setParticipantScreen("register")}
+          onBackHome={() => setParticipantScreen("entry")}
+          onRegister={registerNewUser}
+          onRecover={recoverByCode}
+          onSubmit={submitAnswer}
+          onExit={openExitFlow}
+        />
+      )}
     </div>
   );
 }
 
-// ========== 子组件：管理员看板 ==========
-function AdminPage({ data, onNext, onStop, onReset, onBack }) {
-  const currentQ = allQuestions[data.currentQuestionIndex];
-  
-  // 筛选本题提交
-  const currentSubs = (data.submissions || [])
-    .filter(s => s.questionId === currentQ?.id)
-    .sort((a, b) => a.submitTime - b.submitTime); // 按提交时间排序，但显示耗时
-
+// ===== Top Bar =====
+function TopBar({ isConnected, mode, onGoParticipant, onOpenAdmin, user }) {
   return (
-    <div className="min-h-screen p-6 bg-slate-900">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <button onClick={onBack} className="text-slate-400 hover:text-white">← Exit</button>
-          <div className="flex gap-4">
-            <button onClick={onStop} className="px-4 py-2 bg-slate-800 hover:bg-red-900/30 text-red-400 rounded-lg text-sm font-bold border border-slate-700 hover:border-red-500/50 transition-all">
-              ⏹ 停止 Stop
-            </button>
-            <button onClick={onReset} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm border border-slate-700 transition-all">
-              🔄 重置 Reset
-            </button>
+    <div className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/80 backdrop-blur">
+      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="text-sm font-semibold">Realtime Quiz</div>
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${
+                isConnected ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
+              }`}
+            />
+            {isConnected ? "Online" : "Connecting"}
           </div>
+          {mode === "admin" && (
+            <span className="ml-2 rounded-full border border-indigo-500/40 bg-indigo-500/10 px-2 py-0.5 text-xs text-indigo-300">
+              Admin
+            </span>
+          )}
         </div>
 
-        {/* 控制区 */}
-        <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-8 flex flex-col md:flex-row gap-6 items-center justify-between">
-          <div>
-            <span className="text-indigo-400 text-xs font-bold tracking-wider uppercase mb-1 block">Current Question</span>
-            <h2 className="text-xl font-bold text-white max-w-lg truncate">
-              {currentQ ? `Q${currentQ.id}: ${currentQ.question}` : "Done"}
-            </h2>
-            {currentQ && <p className="text-green-400 text-sm mt-1 font-mono">Answer: {currentQ.correctAnswer}</p>}
-          </div>
-          <button 
-            onClick={onNext}
-            disabled={!currentQ || data.quizStatus === "stopped"}
-            className="px-8 py-4 bg-white text-slate-900 hover:bg-indigo-50 font-bold rounded-xl shadow-lg shadow-white/10 transition-all disabled:opacity-50"
-          >
-            下一题 Next →
-          </button>
-        </div>
-
-        {/* 提交列表 */}
-        <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
-          <div className="p-4 border-b border-slate-700 bg-slate-800/50 flex justify-between items-center">
-            <h3 className="font-bold text-white">📋 实时提交 Live Submissions</h3>
-            <span className="text-sm text-slate-400">{currentSubs.length} entries</span>
-          </div>
-          
-          {currentSubs.length === 0 ? (
-            <div className="p-12 text-center text-slate-600">Waiting for answers...</div>
+        <div className="flex items-center gap-2">
+          {mode === "admin" ? (
+            <button
+              onClick={onGoParticipant}
+              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+            >
+              返回参与者端
+            </button>
           ) : (
-            <div className="divide-y divide-slate-700/50">
-              {currentSubs.map((sub, idx) => (
-                <div key={sub.id} className="p-4 flex items-center justify-between hover:bg-slate-700/20 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <span className={`w-8 h-8 flex items-center justify-center rounded-lg font-bold text-sm ${idx < 3 ? "bg-amber-500 text-slate-900" : "bg-slate-700 text-slate-400"}`}>
-                      {idx + 1}
-                    </span>
-                    <div>
-                      <div className="font-bold text-white text-lg">{sub.userName}</div>
-                      <div className="text-xs text-slate-500">
-                        {/* 这里不再显示具体时间，只显示选项 */}
-                        Selected: <span className="font-mono text-slate-300">{sub.answer}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4 text-right">
-                    {/* 重点修改：只显示耗时 duration */}
-                    <div className="font-mono text-xl font-bold text-indigo-400">
-                      {formatMs(sub.duration)}
-                    </div>
-                    {/* 对错图标 */}
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-lg ${sub.isCorrect ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
-                      {sub.isCorrect ? "✓" : "✗"}
-                    </div>
-                  </div>
+            <>
+              {user ? (
+                <div className="hidden sm:block text-sm text-slate-300">
+                  {user.userName}
                 </div>
-              ))}
-            </div>
+              ) : null}
+              <button
+                onClick={onOpenAdmin}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+              >
+                管理员
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -680,27 +627,893 @@ function AdminPage({ data, onNext, onStop, onReset, onBack }) {
   );
 }
 
-// 通用密码框
-function PasswordModal({ onClose, onSubmit }) {
-  const [val, setVal] = useState("");
+// ===== Participant Shell =====
+function ParticipantShell({
+  view,
+  data,
+  user,
+  participantId,
+  currentQuestion,
+  questions,
+  leaderboard,
+  myRow,
+  onStart,
+  onBackHome,
+  onRegister,
+  onRecover,
+  onSubmit,
+  onExit,
+}) {
+  if (!view) return null;
+
+  if (view.type === "entry") {
+    return (
+      <EntryPage
+        quizStatus={data.quizStatus}
+        currentQuestionIndex={data.currentQuestionIndex}
+        totalQuestions={questions.length}
+        user={user}
+        onStart={onStart}
+      />
+    );
+  }
+
+  if (view.type === "register") {
+    return (
+      <RegisterRecoverPage
+        onBack={onBackHome}
+        onRegister={onRegister}
+        onRecover={onRecover}
+      />
+    );
+  }
+
+  if (view.type === "closed") {
+    return (
+      <ClosedPage
+        leaderboard={leaderboard}
+        myRow={myRow}
+        totalQuestions={questions.length}
+        onBackHome={onBackHome}
+      />
+    );
+  }
+
+  if (view.type === "thanks") {
+    return (
+      <ThanksPage
+        leaderboard={leaderboard}
+        myRow={myRow}
+        totalQuestions={questions.length}
+        onBackHome={onBackHome}
+        onExit={onExit}
+      />
+    );
+  }
+
+  if (view.type === "quiz") {
+    return (
+      <QuizPage
+        data={data}
+        user={user}
+        participantId={participantId}
+        currentQuestion={currentQuestion}
+        totalQuestions={questions.length}
+        onSubmit={onSubmit}
+        onExit={onExit}
+      />
+    );
+  }
+
+  return null;
+}
+
+// ===== Entry Page =====
+function EntryPage({ quizStatus, currentQuestionIndex, totalQuestions, user, onStart }) {
+  const statusText =
+    quizStatus === "stopped"
+      ? "问卷已关闭 / Closed"
+      : currentQuestionIndex >= totalQuestions
+      ? "已完成 / Finished"
+      : "进行中 / Running";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
-      <div className="bg-slate-800 p-8 rounded-2xl w-full max-w-sm border border-slate-700">
-        <h3 className="text-xl font-bold text-white mb-4 text-center">Admin Password</h3>
-        <input 
-          type="password" 
-          autoFocus
-          className="w-full bg-slate-900 border border-slate-600 rounded-xl p-4 text-center text-white mb-4 outline-none focus:border-indigo-500"
-          onChange={e => setVal(e.target.value)}
-        />
-        <div className="flex gap-2">
-          <button onClick={onClose} className="flex-1 py-3 bg-slate-700 text-white rounded-xl">Cancel</button>
-          <button onClick={() => onSubmit(val)} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold">Login</button>
+    <div className="mx-auto max-w-3xl px-4 py-10">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">参与答题</h1>
+            <p className="mt-1 text-sm text-slate-400">
+              状态：{statusText}
+            </p>
+          </div>
+          {user ? (
+            <div className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-200">
+              当前用户：<span className="font-semibold">{user.userName}</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-6 space-y-3 text-sm text-slate-300">
+          <div>规则：昵称唯一；每人一个恢复码（用于换设备找回）。</div>
+          <div>停止后不可提交，但可查看排行榜。</div>
+        </div>
+
+        <div className="mt-8">
+          <button
+            onClick={onStart}
+            className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white hover:bg-indigo-500"
+          >
+            {user ? "进入 / Continue" : "开始 / Start"}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
+// ===== Register / Recover Page =====
+function RegisterRecoverPage({ onBack, onRegister, onRecover }) {
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleRegister() {
+    setError("");
+    setBusy(true);
+    const res = await onRegister(name);
+    setBusy(false);
+    if (!res.ok) setError(res.error || "注册失败 / Failed.");
+  }
+
+  async function handleRecover() {
+    setError("");
+    setBusy(true);
+    const res = await onRecover(code);
+    setBusy(false);
+    if (!res.ok) setError(res.error || "找回失败 / Failed.");
+  }
+
+  return (
+    <div className="mx-auto max-w-lg px-4 py-10">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
+        <button
+          onClick={onBack}
+          className="text-sm text-slate-400 hover:text-slate-200"
+        >
+          ← 回到主页面
+        </button>
+
+        <h2 className="mt-4 text-xl font-bold">注册 / 找回</h2>
+        <p className="mt-2 text-sm text-slate-400">
+          新用户输入昵称注册；老用户输入恢复码找回身份。
+        </p>
+
+        <div className="mt-6 grid gap-4">
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <div className="text-sm font-semibold">新用户注册</div>
+            <label className="mt-3 block text-xs text-slate-400">昵称（唯一）</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 outline-none focus:border-indigo-500"
+              placeholder="例如：SHI"
+              autoComplete="off"
+            />
+            <button
+              disabled={busy || !normalizeName(name)}
+              onClick={handleRegister}
+              className="mt-3 w-full rounded-lg bg-indigo-600 px-3 py-2 font-semibold disabled:opacity-50"
+            >
+              注册并进入
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <div className="text-sm font-semibold">老用户找回</div>
+            <label className="mt-3 block text-xs text-slate-400">恢复码</label>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-slate-100 outline-none focus:border-indigo-500"
+              placeholder="例如：A2BC9D"
+              autoComplete="off"
+            />
+            <button
+              disabled={busy || !normalizeRecoveryCode(code)}
+              onClick={handleRecover}
+              className="mt-3 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-semibold text-slate-100 hover:bg-slate-800 disabled:opacity-50"
+            >
+              使用恢复码进入
+            </button>
+          </div>
+
+          {error ? (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== Quiz Page =====
+function QuizPage({ data, user, participantId, currentQuestion, totalQuestions, onSubmit, onExit }) {
+  const [selected, setSelected] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState("");
+
+  const questionId = currentQuestion?.id;
+  const subKey = participantId && questionId ? `${participantId}_${questionId}` : "";
+  const submission = subKey ? (data.submissions || {})[subKey] : null;
+  const hasSubmitted = !!submission;
+
+  const stKey = participantId && questionId ? `${participantId}_${questionId}` : "";
+  const startTime = stKey ? (data.startTimes || {})[stKey] : null;
+
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    setSelected(null);
+    setErr("");
+  }, [data.currentQuestionIndex]);
+
+  useEffect(() => {
+    if (!startTime || hasSubmitted) return;
+    const t = setInterval(() => setElapsed(Math.max(0, now() - startTime)), 100);
+    return () => clearInterval(t);
+  }, [startTime, hasSubmitted]);
+
+  async function handleSubmit() {
+    if (!selected) return;
+    setErr("");
+    setSubmitting(true);
+    const res = await onSubmit(selected);
+    setSubmitting(false);
+    if (!res.ok) setErr(res.error || "提交失败 / Failed.");
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-10">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="text-sm text-slate-300">
+          用户：<span className="font-semibold">{user?.userName || "-"}</span>
+        </div>
+        <button
+          onClick={onExit}
+          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+        >
+          退出
+        </button>
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xs font-semibold text-slate-400">
+              QUESTION {data.currentQuestionIndex + 1} / {totalQuestions}
+            </div>
+            <h2 className="mt-2 whitespace-pre-line text-xl font-bold">
+              {currentQuestion?.question || "无题目"}
+            </h2>
+          </div>
+          {!hasSubmitted ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-right">
+              <div className="text-xs text-slate-400">用时</div>
+              <div className="font-mono text-lg font-semibold text-amber-300">
+                {formatMs(startTime ? elapsed : 0)}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-right">
+              <div className="text-xs text-slate-400">已提交</div>
+              <div className="font-mono text-lg font-semibold text-slate-200">
+                {formatMs(submission.duration)}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 grid gap-3">
+          {(currentQuestion?.options || []).map((opt) => {
+            const isPicked = selected === opt.id;
+            const isMyAnswer = submission?.answer === opt.id;
+
+            let cls =
+              "w-full rounded-xl border px-4 py-3 text-left transition ";
+            if (hasSubmitted) {
+              if (isMyAnswer) {
+                cls += submission.isCorrect
+                  ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
+                  : "border-red-500/60 bg-red-500/10 text-red-200";
+              } else {
+                cls += "border-slate-800 bg-slate-950 text-slate-400";
+              }
+            } else {
+              cls += isPicked
+                ? "border-indigo-500/60 bg-indigo-500/10 text-indigo-200"
+                : "border-slate-800 bg-slate-950 text-slate-200 hover:bg-slate-900";
+            }
+
+            return (
+              <button
+                key={opt.id}
+                disabled={hasSubmitted}
+                onClick={() => setSelected(opt.id)}
+                className={cls}
+              >
+                <span className="mr-3 inline-flex h-6 w-6 items-center justify-center rounded-md border border-current/40 font-mono text-xs">
+                  {opt.id}
+                </span>
+                {opt.text}
+              </button>
+            );
+          })}
+        </div>
+
+        {err ? (
+          <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            {err}
+          </div>
+        ) : null}
+
+        <div className="mt-6">
+          {data.quizStatus !== "running" ? (
+            <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-sm text-slate-300">
+              问卷已关闭，无法提交。
+            </div>
+          ) : hasSubmitted ? (
+            <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-sm text-slate-300">
+              已提交，等待下一题。
+            </div>
+          ) : (
+            <button
+              disabled={!selected || submitting}
+              onClick={handleSubmit}
+              className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold disabled:opacity-50"
+            >
+              {submitting ? "提交中..." : "提交"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== Thanks Page (Natural End) =====
+function ThanksPage({ leaderboard, myRow, totalQuestions, onBackHome, onExit }) {
+  return (
+    <div className="mx-auto max-w-5xl px-4 py-10">
+      <div className="mb-4 flex items-center justify-between">
+        <button
+          onClick={onBackHome}
+          className="text-sm text-slate-400 hover:text-slate-200"
+        >
+          ← 回到主页面
+        </button>
+        <button
+          onClick={onExit}
+          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+        >
+          退出
+        </button>
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
+        <h2 className="text-2xl font-bold">谢谢参与</h2>
+        <p className="mt-2 text-sm text-slate-400">
+          你已完成本次答题。下面是个人统计与排行榜（未作答每题按 120s 计入总耗时）。
+        </p>
+
+        <div className="mt-6">
+          <MyStats myRow={myRow} totalQuestions={totalQuestions} />
+        </div>
+      </div>
+
+      <div className="mt-6">
+        <LeaderboardTable leaderboard={leaderboard} totalQuestions={totalQuestions} />
+      </div>
+    </div>
+  );
+}
+
+// ===== Closed Page (Admin Stop) =====
+function ClosedPage({ leaderboard, myRow, totalQuestions, onBackHome }) {
+  return (
+    <div className="mx-auto max-w-5xl px-4 py-10">
+      <div className="mb-4">
+        <button
+          onClick={onBackHome}
+          className="text-sm text-slate-400 hover:text-slate-200"
+        >
+          ← 回到主页面
+        </button>
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
+        <h2 className="text-2xl font-bold">问卷已关闭</h2>
+        <p className="mt-2 text-sm text-slate-400">
+          问卷已停止提交。下面展示排行榜（未作答每题按 120s 计入总耗时）。
+        </p>
+
+        <div className="mt-6">
+          <MyStats myRow={myRow} totalQuestions={totalQuestions} />
+        </div>
+      </div>
+
+      <div className="mt-6">
+        <LeaderboardTable leaderboard={leaderboard} totalQuestions={totalQuestions} />
+      </div>
+    </div>
+  );
+}
+
+// ===== My Stats =====
+function MyStats({ myRow, totalQuestions }) {
+  if (!myRow) {
+    return (
+      <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300">
+        未识别到用户身份。
+      </div>
+    );
+  }
+  const accPct = Math.round(myRow.accuracy * 100);
+
+  return (
+    <div className="grid gap-3 md:grid-cols-4">
+      <StatCard label="排名 Rank" value={`${myRow.rank}`} />
+      <StatCard label="正确 Correct" value={`${myRow.correctCount}/${totalQuestions}`} />
+      <StatCard label="正确率 Accuracy" value={`${accPct}%`} />
+      <StatCard label="总耗时 Total Time" value={formatMs(myRow.totalTime)} mono />
+    </div>
+  );
+}
+
+function StatCard({ label, value, mono }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+      <div className="text-xs text-slate-400">{label}</div>
+      <div className={`mt-1 text-lg font-semibold ${mono ? "font-mono" : ""}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// ===== Leaderboard Table =====
+function LeaderboardTable({ leaderboard, totalQuestions }) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-bold">排行榜 Leaderboard</h3>
+        <div className="text-xs text-slate-400">
+          排序：正确率↓，总耗时↑（未作答每题 +120s）
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[760px] border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-slate-800 text-left text-slate-300">
+              <th className="py-2 pr-3">Rank</th>
+              <th className="py-2 pr-3">User</th>
+              <th className="py-2 pr-3">Correct</th>
+              <th className="py-2 pr-3">Accuracy</th>
+              <th className="py-2 pr-3">Answered</th>
+              <th className="py-2 pr-3">Unanswered</th>
+              <th className="py-2 pr-3">Total Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {leaderboard.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="py-6 text-center text-slate-400">
+                  暂无数据
+                </td>
+              </tr>
+            ) : (
+              leaderboard.map((r) => (
+                <tr key={r.participantId} className="border-b border-slate-800/60">
+                  <td className="py-2 pr-3 font-mono">{r.rank}</td>
+                  <td className="py-2 pr-3 font-semibold">{r.userName}</td>
+                  <td className="py-2 pr-3">
+                    {r.correctCount}/{totalQuestions}
+                  </td>
+                  <td className="py-2 pr-3">{Math.round(r.accuracy * 100)}%</td>
+                  <td className="py-2 pr-3">{r.answeredCount}</td>
+                  <td className="py-2 pr-3">{r.unansweredCount}</td>
+                  <td className="py-2 pr-3 font-mono">{formatMs(r.totalTime)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ===== Admin Dashboard =====
+function AdminDashboard({ data, questions, leaderboard, onBack, onNext, onStop, onReset }) {
+  const totalQuestions = questions.length;
+  const idx = data.currentQuestionIndex;
+  const currentQ = idx >= 0 && idx < totalQuestions ? questions[idx] : null;
+
+  // Current question submissions sorted by submitTime
+  const currentSubs = useMemo(() => {
+    if (!currentQ) return [];
+    const subsObj = data.submissions || {};
+    const list = Object.values(subsObj).filter((s) => s.questionId === currentQ.id);
+    list.sort((a, b) => (a.submitTime || 0) - (b.submitTime || 0));
+    return list;
+  }, [data.submissions, currentQ]);
+
+  const isNaturalEnded = data.quizStatus === "running" && data.currentQuestionIndex >= totalQuestions;
+
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-8">
+      <div className="mb-4 flex items-center justify-between">
+        <button
+          onClick={onBack}
+          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+        >
+          ← 返回参与者端
+        </button>
+        <div className="flex items-center gap-2">
+          <span
+            className={`rounded-full border px-2 py-0.5 text-xs ${
+              data.quizStatus === "stopped"
+                ? "border-red-500/50 bg-red-500/10 text-red-200"
+                : isNaturalEnded
+                ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-200"
+                : "border-indigo-500/50 bg-indigo-500/10 text-indigo-200"
+            }`}
+          >
+            {data.quizStatus === "stopped"
+              ? "STOPPED"
+              : isNaturalEnded
+              ? "FINISHED"
+              : "RUNNING"}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 lg:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs text-slate-400">当前题目 Current</div>
+              <div className="mt-1 text-lg font-bold">
+                {currentQ ? `Q${currentQ.id}` : "已无题目（自然结束）"}
+              </div>
+              {currentQ ? (
+                <div className="mt-2 whitespace-pre-line text-sm text-slate-200">
+                  {currentQ.question}
+                </div>
+              ) : (
+                <div className="mt-2 text-sm text-slate-400">
+                  当前索引已越界，参与者端将显示“谢谢参与”页。
+                </div>
+              )}
+              {currentQ ? (
+                <div className="mt-3 text-sm text-emerald-300">
+                  正确答案 Answer: <span className="font-mono">{currentQ.correctAnswer}</span>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                disabled={data.quizStatus !== "running" || data.currentQuestionIndex >= totalQuestions}
+                onClick={onNext}
+                className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 disabled:opacity-50"
+              >
+                下一题 Next
+              </button>
+              <button
+                onClick={onStop}
+                className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/15"
+              >
+                Stop
+              </button>
+              <button
+                onClick={onReset}
+                className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">本题实时提交</div>
+              <div className="text-xs text-slate-400">
+                不展示提交时间点，仅看耗时/对错
+              </div>
+            </div>
+
+            {currentQ ? (
+              currentSubs.length === 0 ? (
+                <div className="py-8 text-center text-sm text-slate-400">
+                  暂无提交
+                </div>
+              ) : (
+                <div className="mt-3 divide-y divide-slate-800">
+                  {currentSubs.map((s, i) => (
+                    <div key={`${s.participantId}_${s.questionId}`} className="flex items-center justify-between py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 font-mono text-xs text-slate-200">
+                          {i + 1}
+                        </div>
+                        <div>
+                          <div className="font-semibold">{s.userName}</div>
+                          <div className="text-xs text-slate-400">
+                            Selected: <span className="font-mono text-slate-200">{s.answer}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="font-mono text-lg font-semibold text-indigo-200">
+                          {formatMs(s.duration)}
+                        </div>
+                        <div
+                          className={`rounded-full border px-2 py-0.5 text-xs ${
+                            s.isCorrect
+                              ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-200"
+                              : "border-red-500/50 bg-red-500/10 text-red-200"
+                          }`}
+                        >
+                          {s.isCorrect ? "Correct" : "Wrong"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              <div className="py-6 text-sm text-slate-400">
+                当前无题目。
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <div className="text-sm font-semibold">完整题库（含答案）</div>
+          <div className="mt-2 text-xs text-slate-400">
+            当前题高亮
+          </div>
+          <div className="mt-4 max-h-[560px] overflow-auto pr-1">
+            <div className="space-y-3">
+              {questions.map((q, index) => (
+                <div
+                  key={q.id}
+                  className={`rounded-xl border p-3 ${
+                    index === data.currentQuestionIndex
+                      ? "border-indigo-500/60 bg-indigo-500/10"
+                      : "border-slate-800 bg-slate-950"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold">Q{q.id}</div>
+                    <div className="text-xs text-emerald-300">
+                      Ans: <span className="font-mono">{q.correctAnswer}</span>
+                    </div>
+                  </div>
+                  <div className="mt-2 whitespace-pre-line text-xs text-slate-200">
+                    {q.question}
+                  </div>
+                  <div className="mt-2 grid gap-1">
+                    {q.options.map((o) => (
+                      <div key={o.id} className="text-xs text-slate-300">
+                        <span className="mr-2 font-mono text-slate-400">{o.id}.</span>
+                        {o.text}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+                自然结束条件：currentQuestionIndex ≥ {totalQuestions}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6">
+        <LeaderboardTable leaderboard={leaderboard} totalQuestions={totalQuestions} />
+      </div>
+    </div>
+  );
+}
+
+// ===== Admin Login Modal =====
+function AdminLoginModal({ onClose, onSuccess }) {
+  const [pwd, setPwd] = useState("");
+  const [err, setErr] = useState("");
+
+  function submit() {
+    if (pwd === ADMIN_PASSWORD) onSuccess();
+    else setErr("密码错误 / Wrong password.");
+  }
+
+  return (
+    <ModalShell onClose={onClose}>
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div className="text-lg font-bold">管理员登录</div>
+        <div className="mt-3">
+          <input
+            type="password"
+            value={pwd}
+            onChange={(e) => {
+              setPwd(e.target.value);
+              setErr("");
+            }}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-indigo-500"
+            placeholder="Password"
+            autoFocus
+          />
+        </div>
+        {err ? (
+          <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            {err}
+          </div>
+        ) : null}
+        <div className="mt-5 flex gap-2">
+          <button
+            onClick={onClose}
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            取消
+          </button>
+          <button
+            onClick={submit}
+            className="flex-1 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+          >
+            登录
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ===== Recovery Code Modal =====
+function RecoveryCodeModal({ code, onClose }) {
+  const [copied, setCopied] = useState(false);
+
+  async function doCopy() {
+    const ok = await copyToClipboard(code);
+    setCopied(ok);
+    setTimeout(() => setCopied(false), 1200);
+  }
+
+  return (
+    <ModalShell onClose={() => {}}>
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div className="text-lg font-bold">保存你的恢复码</div>
+        <div className="mt-2 text-sm text-slate-400">
+          换设备或清理缓存后，用它找回身份。每人一个，固定不变。
+        </div>
+
+        <div className="mt-4 rounded-xl border border-indigo-500/30 bg-slate-950 p-4 text-center">
+          <div className="select-all font-mono text-3xl font-bold tracking-widest text-indigo-200">
+            {code}
+          </div>
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={doCopy}
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            {copied ? "已复制" : "复制"}
+          </button>
+          <button
+            onClick={onClose}
+            className="flex-1 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+          >
+            我已保存，进入
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ===== Generic Confirm Modal =====
+function ConfirmModal({ title, description, confirmText, cancelText, onConfirm, onCancel }) {
+  return (
+    <ModalShell onClose={onCancel}>
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div className="text-lg font-bold">{title}</div>
+        <div className="mt-2 text-sm text-slate-400">{description}</div>
+        <div className="mt-5 flex gap-2">
+          <button
+            onClick={onCancel}
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            {cancelText}
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+          >
+            {confirmText}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ===== Exit Final Modal (must show recovery code) =====
+function ExitFinalModal({ code, onCancel, onConfirm }) {
+  const [copied, setCopied] = useState(false);
+
+  async function doCopy() {
+    const ok = await copyToClipboard(code);
+    setCopied(ok);
+    setTimeout(() => setCopied(false), 1200);
+  }
+
+  return (
+    <ModalShell onClose={onCancel}>
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div className="text-lg font-bold">退出前请保存恢复码</div>
+        <div className="mt-2 text-sm text-slate-400">
+          退出会清除本设备身份。请先截图/复制恢复码，否则可能无法找回。
+        </div>
+
+        <div className="mt-4 rounded-xl border border-indigo-500/30 bg-slate-950 p-4 text-center">
+          <div className="select-all font-mono text-3xl font-bold tracking-widest text-indigo-200">
+            {code || "-"}
+          </div>
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={doCopy}
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            {copied ? "已复制" : "复制"}
+          </button>
+          <button
+            onClick={onCancel}
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            取消
+          </button>
+        </div>
+
+        <button
+          onClick={onConfirm}
+          className="mt-3 w-full rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+        >
+          我已保存并退出
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ===== Modal Shell =====
+function ModalShell({ children, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-md">
+        <div onClick={onClose ? onClose : undefined}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ===== Mount =====
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
