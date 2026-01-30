@@ -250,8 +250,7 @@ function App() {
       const now = Date.now();
       update(ref(db, "/questionStartTimes"), { [key]: now });
     }
-  }, [page, participantId, data.currentQuestionIndex, currentQuestion, data.questionStartTimes, data.submissions]); }, [page, participantId, data.currentQuestionIndex, currentQuestion?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
+  }, [page, participantId, data.currentQuestionIndex, currentQuestion, data.questionStartTimes, data.submissions]);
   // ========== 提交答案 ==========
   const handleSubmit = async (answer) => {
     if (!participantId || !currentQuestion) return;
