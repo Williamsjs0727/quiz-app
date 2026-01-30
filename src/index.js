@@ -1,4 +1,3 @@
-
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { ref, onValue, set, update, runTransaction } from "firebase/database";
@@ -6,21 +5,12 @@ import { db } from "./firebase";
 
 /**
  * Realtime Quiz App
- * Requirements implemented:
- * 1) Timing starts ONLY after user enters quiz:
- *    - New user: after clicking "我已保存，进入" (recovery modal closes)
- *    - Returning user: after clicking "直接进入"
- *    - No startTime is written while on Entry/Register/Modals.
- * 2) If nickname already exists:
- *    show prompt "是否检测到本机就是该用户，一键进入/否则用恢复码"
- *    - If this browser has matching stored participantId, allow one-click enter
- *    - Otherwise guide to recovery code
- * 3) Browser detection:
- *    - On Entry page, if localStorage participantId found, show "检测到xxx，直接进入"
- * 4) Leaderboard:
- *    - While running (not naturally ended): show cumulative answered time (no penalty)
- *    - After stopped OR naturally ended: apply unanswered penalty (120s per unanswered) for final total time
- * 5) Exit: 2-step confirmation; step2 shows recovery code; clears localStorage.
+ * Implemented:
+ * - 计时只在“进入答题”后开始（新用户点“我已保存，进入”；老用户点“直接进入”）
+ * - 昵称已存在：弹窗提示“是否检测到本机就是该用户：一键进入 / 否则用恢复码”
+ * - 首页检测到本机用户：显示“欢迎回来 + 直接进入”
+ * - 管理员排行榜：进行中=累计已作答耗时；结束/stop=加未作答120s惩罚后的总耗时
+ * - 退出两次确认，第二次展示恢复码
  */
 
 const ADMIN_PASSWORD = "ennebei";
@@ -66,7 +56,8 @@ const allQuestions = [
   },
   {
     id: 4,
-    question: "CSS 中，哪个属性用于设置弹性布局？\nIn CSS, which property is used to set flex layout?",
+    question:
+      "CSS 中，哪个属性用于设置弹性布局？\nIn CSS, which property is used to set flex layout?",
     options: [
       { id: "A", text: "display: block" },
       { id: "B", text: "display: flex" },
@@ -126,7 +117,7 @@ async function copyToClipboard(text) {
   }
 }
 
-// ===== DB initial data (keyed objects) =====
+// ===== DB initial data =====
 const initialData = {
   quizStatus: "running",
   stoppedAt: null,
@@ -230,7 +221,7 @@ function App() {
     inputName: "",
     existingPid: "",
     canOneClick: false,
-    currentDetectedName: "",
+    existingName: "",
   });
 
   // ===== Subscribe DB root =====
@@ -261,7 +252,7 @@ function App() {
     return () => unsub();
   }, []);
 
-  // ===== Auto restore identity from localStorage (but DO NOT auto-enter quiz) =====
+  // ===== Restore identity (but DO NOT auto enter quiz) =====
   useEffect(() => {
     const saved = localStorage.getItem(LS_PARTICIPANT_ID);
     if (!saved) {
@@ -281,17 +272,15 @@ function App() {
   }, [data.users]);
 
   // ===== Derived =====
-  const quizStatus = data.quizStatus;
-  const isStopped = quizStatus === "stopped";
-  const isNaturalEnded = quizStatus === "running" && data.currentQuestionIndex >= totalQuestions;
-  const isInProgress = quizStatus === "running" && data.currentQuestionIndex < totalQuestions;
+  const isStopped = data.quizStatus === "stopped";
+  const isNaturalEnded = data.quizStatus === "running" && data.currentQuestionIndex >= totalQuestions;
+  const isInProgress = data.quizStatus === "running" && data.currentQuestionIndex < totalQuestions;
 
   const currentQuestion =
     data.currentQuestionIndex >= 0 && data.currentQuestionIndex < totalQuestions
       ? allQuestions[data.currentQuestionIndex]
       : null;
 
-  // Leaderboards: live (no penalty) vs final (with penalty)
   const leaderboardLive = useMemo(() => {
     return computeLeaderboard(
       { users: data.users, submissions: data.submissions },
@@ -313,23 +302,21 @@ function App() {
     return leaderboardFinal.find((r) => r.participantId === participantId) || null;
   }, [leaderboardFinal, participantId]);
 
-  // ===== Participant effective view =====
+  // ===== Participant view =====
   const participantView = useMemo(() => {
     if (mode !== "participant") return null;
 
     if (isStopped) return { type: "closed" };
     if (isNaturalEnded) return { type: "thanks" };
 
-    // Not logged-in
     if (!user || !participantId) {
       return { type: participantScreen === "register" ? "register" : "entry" };
     }
 
-    // Logged-in: default stay on entry; only go quiz when participantScreen === "quiz"
     return { type: participantScreen === "quiz" ? "quiz" : "entry" };
   }, [mode, isStopped, isNaturalEnded, user, participantId, participantScreen]);
 
-  // ===== Ensure start time helper (write ONLY when entering quiz) =====
+  // ===== Ensure start time helper =====
   async function ensureStartTimeForCurrentQuestion(pid) {
     if (!pid) return;
     if (data.quizStatus !== "running") return;
@@ -341,13 +328,10 @@ function App() {
 
     const stKey = `${pid}_${qid}`;
     const stRef = ref(db, `/startTimes/${stKey}`);
-    await runTransaction(stRef, (cur) => {
-      if (cur === null) return now();
-      return cur;
-    }).catch(() => {});
+    await runTransaction(stRef, (cur) => (cur === null ? now() : cur)).catch(() => {});
   }
 
-  // ===== Only create startTime while in quiz screen =====
+  // ===== Start time is written ONLY while on quiz screen =====
   useEffect(() => {
     if (mode !== "participant") return;
     if (!user || !participantId) return;
@@ -361,17 +345,9 @@ function App() {
     const stKey = `${participantId}_${currentQuestion.id}`;
     const stRef = ref(db, `/startTimes/${stKey}`);
     runTransaction(stRef, (cur) => (cur === null ? now() : cur)).catch(() => {});
-  }, [
-    mode,
-    user,
-    participantId,
-    isInProgress,
-    participantScreen,
-    currentQuestion,
-    data.submissions,
-  ]);
+  }, [mode, user, participantId, isInProgress, participantScreen, currentQuestion, data.submissions]);
 
-  // ===== Identity: register/recover =====
+  // ===== Identity helpers =====
   async function reserveRecoveryCodeUnique() {
     for (let i = 0; i < 12; i++) {
       const code = generateRecoveryCode();
@@ -413,7 +389,6 @@ function App() {
     try {
       code = await reserveRecoveryCodeUnique();
     } catch {
-      // rollback best-effort
       await runTransaction(userNameIdxRef, (cur) => {
         if (cur === desiredId) return null;
         return cur;
@@ -429,16 +404,13 @@ function App() {
       [`recoveryCodeIndex/${code}`]: desiredId,
     });
 
-    // Persist identity but DO NOT start timing and DO NOT auto-enter quiz
     localStorage.setItem(LS_PARTICIPANT_ID, desiredId);
     setParticipantId(desiredId);
     setUser({ participantId: desiredId, ...userObj });
 
-    // Show recovery modal; timing starts after user confirms modal and enters quiz
+    // show modal, do not start timing yet
     setRecoveryModalCode(code);
     setRecoveryModalOpen(true);
-
-    // stay on entry until confirm
     setParticipantScreen("entry");
 
     return { ok: true };
@@ -458,18 +430,17 @@ function App() {
     setParticipantId(pid);
     setUser({ participantId: pid, ...u });
 
-    // do not auto-enter quiz; user clicks "直接进入" then timing starts
+    // do not auto enter quiz
     setParticipantScreen("entry");
     return { ok: true };
   }
 
-  // ===== Enter quiz (start timing) =====
   async function enterQuiz() {
     setParticipantScreen("quiz");
     await ensureStartTimeForCurrentQuestion(participantId);
   }
 
-  // ===== Handle nickname taken -> modal prompt =====
+  // ===== Name taken flow =====
   function openNameTakenModal(inputName, existingPid) {
     const storedPid = localStorage.getItem(LS_PARTICIPANT_ID);
     const existingUser = (data.users || {})[existingPid];
@@ -486,7 +457,7 @@ function App() {
       inputName,
       existingPid,
       canOneClick,
-      currentDetectedName: existingUser?.userName || inputName,
+      existingName: existingUser?.userName || inputName,
     });
   }
 
@@ -521,7 +492,7 @@ function App() {
     setMode("participant");
   }
 
-  // ===== Quiz: submit =====
+  // ===== Submit =====
   async function submitAnswer(answerId) {
     if (!user || !participantId) return { ok: false, error: "未登录 / Not logged in." };
     if (data.quizStatus !== "running") return { ok: false, error: "问卷已关闭 / Closed." };
@@ -594,7 +565,7 @@ function App() {
           code={recoveryModalCode}
           onConfirm={async () => {
             setRecoveryModalOpen(false);
-            await enterQuiz(); // timing starts here
+            await enterQuiz();
           }}
         />
       )}
@@ -602,13 +573,10 @@ function App() {
       {nameTakenModal.open && (
         <NameTakenModal
           canOneClick={nameTakenModal.canOneClick}
-          detectedName={nameTakenModal.currentDetectedName}
+          existingName={nameTakenModal.existingName}
           onClose={() => setNameTakenModal((s) => ({ ...s, open: false }))}
           onOneClickEnter={() => oneClickEnterExistingUser(nameTakenModal.existingPid)}
-          onUseRecovery={() => {
-            setNameTakenModal((s) => ({ ...s, open: false }));
-            // stay on register page; user inputs recovery code
-          }}
+          onUseRecovery={() => setNameTakenModal((s) => ({ ...s, open: false }))}
         />
       )}
 
@@ -829,7 +797,7 @@ function EntryPage({ quizStatus, currentQuestionIndex, totalQuestions, user, onS
 
         <div className="mt-6 space-y-3 text-sm text-slate-300">
           <div>规则：昵称唯一；每人一个恢复码（用于换设备找回）。</div>
-          <div>开始计时：仅在点击“直接进入/我已保存进入”进入答题页后开始。</div>
+          <div>开始计时：仅在点击“直接进入/我已保存，进入”后开始。</div>
         </div>
 
         {user ? (
@@ -1101,7 +1069,7 @@ function QuizPage({ data, user, participantId, currentQuestion, totalQuestions, 
   );
 }
 
-// ===== Thanks Page =====
+// ===== Thanks / Closed =====
 function ThanksPage({ leaderboard, myRow, totalQuestions, onBackHome, onExit }) {
   return (
     <div className="mx-auto max-w-5xl px-4 py-10">
@@ -1119,10 +1087,7 @@ function ThanksPage({ leaderboard, myRow, totalQuestions, onBackHome, onExit }) 
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
         <h2 className="text-2xl font-bold">谢谢参与</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          最终榜单：正确率↓，总耗时↑（未作答每题 +120s）。
-        </p>
-
+        <p className="mt-2 text-sm text-slate-400">最终榜单：正确率↓，总耗时↑（未作答每题 +120s）。</p>
         <div className="mt-6">
           <MyStats myRow={myRow} totalQuestions={totalQuestions} />
         </div>
@@ -1135,7 +1100,6 @@ function ThanksPage({ leaderboard, myRow, totalQuestions, onBackHome, onExit }) 
   );
 }
 
-// ===== Closed Page =====
 function ClosedPage({ leaderboard, myRow, totalQuestions, onBackHome }) {
   return (
     <div className="mx-auto max-w-5xl px-4 py-10">
@@ -1147,10 +1111,7 @@ function ClosedPage({ leaderboard, myRow, totalQuestions, onBackHome }) {
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
         <h2 className="text-2xl font-bold">问卷已关闭</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          问卷已停止提交。最终榜单：正确率↓，总耗时↑（未作答每题 +120s）。
-        </p>
-
+        <p className="mt-2 text-sm text-slate-400">最终榜单：正确率↓，总耗时↑（未作答每题 +120s）。</p>
         <div className="mt-6">
           <MyStats myRow={myRow} totalQuestions={totalQuestions} />
         </div>
@@ -1163,7 +1124,6 @@ function ClosedPage({ leaderboard, myRow, totalQuestions, onBackHome }) {
   );
 }
 
-// ===== My Stats =====
 function MyStats({ myRow, totalQuestions }) {
   if (!myRow) {
     return (
@@ -1173,7 +1133,6 @@ function MyStats({ myRow, totalQuestions }) {
     );
   }
   const accPct = Math.round(myRow.accuracy * 100);
-
   return (
     <div className="grid gap-3 md:grid-cols-4">
       <StatCard label="排名 Rank" value={`${myRow.rank}`} />
@@ -1192,7 +1151,6 @@ function StatCard({ label, value, mono }) {
   );
 }
 
-// ===== Leaderboard Table =====
 function LeaderboardTable({ leaderboard, totalQuestions, variant }) {
   const isLive = variant === "live";
   return (
@@ -1368,9 +1326,7 @@ function AdminDashboard({
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <div className="font-mono text-lg font-semibold text-indigo-200">
-                          {formatMs(s.duration)}
-                        </div>
+                        <div className="font-mono text-lg font-semibold text-indigo-200">{formatMs(s.duration)}</div>
                         <div
                           className={`rounded-full border px-2 py-0.5 text-xs ${
                             s.isCorrect
@@ -1503,7 +1459,7 @@ function RecoveryCodeModal({ code, onConfirm }) {
   }
 
   return (
-    <ModalShell onClose={() => {}}>
+    <ModalShell onClose={null}>
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
         <div className="text-lg font-bold">保存你的恢复码</div>
         <div className="mt-2 text-sm text-slate-400">
@@ -1536,13 +1492,13 @@ function RecoveryCodeModal({ code, onConfirm }) {
 }
 
 // ===== Name Taken Modal =====
-function NameTakenModal({ canOneClick, detectedName, onClose, onOneClickEnter, onUseRecovery }) {
+function NameTakenModal({ canOneClick, existingName, onClose, onOneClickEnter, onUseRecovery }) {
   return (
     <ModalShell onClose={onClose}>
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
         <div className="text-lg font-bold">昵称已存在</div>
         <div className="mt-2 text-sm text-slate-400">
-          系统检测到昵称 <span className="font-semibold text-slate-200">{detectedName}</span> 已注册。
+          系统检测到昵称 <span className="font-semibold text-slate-200">{existingName}</span> 已注册。
           <br />
           是否检测到本机就是该用户？
         </div>
@@ -1578,7 +1534,7 @@ function NameTakenModal({ canOneClick, detectedName, onClose, onOneClickEnter, o
   );
 }
 
-// ===== Generic Confirm Modal =====
+// ===== Confirm Modals =====
 function ConfirmModal({ title, description, confirmText, cancelText, onConfirm, onCancel }) {
   return (
     <ModalShell onClose={onCancel}>
@@ -1604,7 +1560,6 @@ function ConfirmModal({ title, description, confirmText, cancelText, onConfirm, 
   );
 }
 
-// ===== Exit Final Modal =====
 function ExitFinalModal({ code, onCancel, onConfirm }) {
   const [copied, setCopied] = useState(false);
 
@@ -1637,4 +1592,38 @@ function ExitFinalModal({ code, onCancel, onConfirm }) {
           </button>
           <button
             onClick={onCancel}
-            className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            取消
+          </button>
+        </div>
+
+        <button
+          onClick={onConfirm}
+          className="mt-3 w-full rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+        >
+          我已保存并退出
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ===== Modal Shell =====
+function ModalShell({ children, onClose }) {
+  const closable = typeof onClose === "function";
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={closable ? onClose : undefined}
+    >
+      <div className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ===== Mount =====
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
