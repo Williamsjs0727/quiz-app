@@ -1,52 +1,52 @@
 @import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap");
 
 :root {
-  --bg-base: #080808;
-  --text-primary: #f2f3f5;
-  --text-muted: #a8adb6;
-  --glass-bg: linear-gradient(145deg, rgba(22, 22, 24, 0.8), rgba(7, 7, 8, 0.76));
-  --glass-border: rgba(255, 255, 255, 0.14);
-  --glass-shadow: 0 24px 56px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  --input-bg: rgba(16, 16, 17, 0.8);
+  --bg-base: #060606;
+  --text-primary: #f6f8ff;
+  --text-muted: #b7becf;
+  --glass-bg: linear-gradient(145deg, rgba(28, 28, 31, 0.74), rgba(8, 8, 10, 0.68));
+  --glass-border: rgba(255, 255, 255, 0.13);
+  --glass-shadow: 0 26px 56px rgba(0, 0, 0, 0.44), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --input-bg: rgba(20, 20, 22, 0.72);
   --accent-main: #2f73ff;
   --accent-strong: #13b6ff;
-  --gradient-a: rgba(255, 255, 255, 0.08);
-  --gradient-b: rgba(255, 255, 255, 0.05);
-  --gradient-c: rgba(255, 255, 255, 0.04);
-  --gradient-d: rgba(255, 255, 255, 0.1);
-  --chrome-tint: #0a0a0a;
-  --edge-top-rgb: 10, 10, 10;
-  --edge-bottom-rgb: 10, 10, 10;
-  --surface-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 42%,
-      rgba(0, 0, 0, 0.22));
-  --nav-glass-bg: linear-gradient(135deg, rgba(16, 16, 18, 0.78), rgba(6, 6, 7, 0.74));
-  --nav-glass-border: rgba(255, 255, 255, 0.16);
-  --nav-glass-shadow: 0 14px 38px rgba(0, 0, 0, 0.4);
+  --gradient-a: rgba(58, 98, 255, 0.48);
+  --gradient-b: rgba(24, 194, 255, 0.34);
+  --gradient-c: rgba(119, 81, 255, 0.26);
+  --gradient-d: rgba(30, 39, 118, 0.38);
+  --chrome-tint: #081834;
+  --edge-top-rgb: 9, 26, 73;
+  --edge-bottom-rgb: 8, 18, 52;
+  --surface-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 38%,
+      rgba(0, 0, 0, 0.14));
+  --nav-glass-bg: linear-gradient(135deg, rgba(20, 20, 24, 0.78), rgba(9, 9, 11, 0.72));
+  --nav-glass-border: rgba(255, 255, 255, 0.14);
+  --nav-glass-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
 }
 
 :root[data-theme="light"] {
-  --bg-base: #ffffff;
-  --text-primary: #13161c;
-  --text-muted: #515965;
-  --glass-bg: linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(245, 247, 250, 0.72));
-  --glass-border: rgba(188, 197, 209, 0.45);
-  --glass-shadow: 0 16px 32px rgba(18, 23, 34, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.98),
-    inset 0 -1px 0 rgba(216, 223, 232, 0.55);
-  --input-bg: rgba(255, 255, 255, 0.9);
+  --bg-base: #f7fcff;
+  --text-primary: #0f1a2b;
+  --text-muted: #274667;
+  --glass-bg: linear-gradient(145deg, rgba(255, 255, 255, 0.67), rgba(233, 246, 255, 0.54));
+  --glass-border: rgba(255, 255, 255, 0.82);
+  --glass-shadow: 0 16px 34px rgba(40, 72, 125, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0 rgba(179, 205, 238, 0.35);
+  --input-bg: rgba(255, 255, 255, 0.78);
   --accent-main: #2556e4;
   --accent-strong: #19a3de;
-  --gradient-a: rgba(255, 255, 255, 0.95);
-  --gradient-b: rgba(246, 248, 251, 0.88);
-  --gradient-c: rgba(235, 239, 245, 0.72);
-  --gradient-d: rgba(247, 249, 252, 0.92);
-  --chrome-tint: #ffffff;
-  --edge-top-rgb: 255, 255, 255;
-  --edge-bottom-rgb: 248, 249, 251;
-  --surface-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.5) 38%,
-      rgba(238, 241, 246, 0.6));
-  --nav-glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(246, 248, 251, 0.82));
-  --nav-glass-border: rgba(173, 182, 194, 0.52);
-  --nav-glass-shadow: 0 12px 28px rgba(20, 28, 44, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.98);
+  --gradient-a: rgba(102, 149, 255, 0.42);
+  --gradient-b: rgba(82, 220, 255, 0.33);
+  --gradient-c: rgba(255, 255, 255, 0.8);
+  --gradient-d: rgba(120, 154, 255, 0.26);
+  --chrome-tint: #d8efff;
+  --edge-top-rgb: 212, 237, 255;
+  --edge-bottom-rgb: 223, 241, 255;
+  --surface-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.18) 34%,
+      rgba(210, 232, 255, 0.38));
+  --nav-glass-bg: linear-gradient(135deg, rgba(248, 253, 255, 0.82), rgba(224, 241, 255, 0.7));
+  --nav-glass-border: rgba(171, 203, 237, 0.66);
+  --nav-glass-shadow: 0 14px 30px rgba(33, 60, 104, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.96);
 }
 
 * {
@@ -95,9 +95,9 @@ body {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 30%, rgba(255, 255, 255, 0.04));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), transparent 28%, rgba(255, 255, 255, 0.06));
   mix-blend-mode: soft-light;
-  opacity: 0.22;
+  opacity: 0.38;
 }
 
 .app-shell::after {
@@ -107,19 +107,19 @@ body {
   pointer-events: none;
   background: linear-gradient(
       180deg,
-      rgba(var(--edge-top-rgb), 0.58) 0%,
-      rgba(var(--edge-top-rgb), 0.32) 14%,
-      rgba(var(--edge-top-rgb), 0.08) 28%,
-      transparent 44%
+      rgba(var(--edge-top-rgb), 0.86) 0%,
+      rgba(var(--edge-top-rgb), 0.52) 12%,
+      rgba(var(--edge-top-rgb), 0.16) 24%,
+      transparent 36%
     ),
     linear-gradient(
       0deg,
-      rgba(var(--edge-bottom-rgb), 0.56) 0%,
-      rgba(var(--edge-bottom-rgb), 0.3) 12%,
-      rgba(var(--edge-bottom-rgb), 0.08) 26%,
-      transparent 42%
+      rgba(var(--edge-bottom-rgb), 0.82) 0%,
+      rgba(var(--edge-bottom-rgb), 0.48) 10%,
+      rgba(var(--edge-bottom-rgb), 0.16) 20%,
+      transparent 33%
     );
-  opacity: 0.36;
+  opacity: 0.48;
 }
 
 .app-gradient {
@@ -215,22 +215,21 @@ body {
 }
 
 .topbar-wrap {
-  padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
-  margin-bottom: 0.2rem;
+  top: calc(env(safe-area-inset-top, 0px) + 10px) !important;
 }
 
 .admin-library-shell {
-  border: 1px solid rgba(179, 188, 200, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.75);
   border-radius: 30px;
-  background: linear-gradient(140deg, rgba(255, 255, 255, 0.8), rgba(243, 246, 250, 0.72));
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.6), rgba(244, 251, 255, 0.52));
   backdrop-filter: blur(16px) saturate(138%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 8px 22px rgba(19, 24, 34, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 8px 22px rgba(28, 58, 108, 0.08);
 }
 
 :root[data-theme="dark"] .admin-library-shell {
-  border-color: rgba(255, 255, 255, 0.15);
-  background: linear-gradient(140deg, rgba(19, 19, 20, 0.72), rgba(8, 8, 9, 0.7));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 14px 32px rgba(0, 0, 0, 0.44);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: linear-gradient(140deg, rgba(24, 27, 36, 0.64), rgba(10, 12, 19, 0.58));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 14px 32px rgba(0, 0, 0, 0.3);
 }
 
 .app-shell .rounded-md {
@@ -321,7 +320,7 @@ body {
 }
 
 .app-shell .bg-white {
-  background: linear-gradient(135deg, #ffffff, #f2f4f7) !important;
+  background: linear-gradient(135deg, #f6f8ff, #d9e8ff) !important;
 }
 
 :root[data-theme="light"] .app-noise {
@@ -329,13 +328,13 @@ body {
 }
 
 :root[data-theme="light"] .app-shell::before {
-  opacity: 0.58;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.28) 42%,
-      rgba(236, 240, 246, 0.42));
+  opacity: 0.64;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.12) 38%,
+      rgba(172, 210, 248, 0.28));
 }
 
 :root[data-theme="light"] .app-shell::after {
-  opacity: 0.56;
+  opacity: 0.72;
 }
 
 :root[data-theme="light"] .app-shell .bg-indigo-600 {
@@ -441,7 +440,7 @@ body {
   }
 
   .topbar-wrap {
-    padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
+    top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
     padding-left: 0.75rem;
     padding-right: 0.75rem;
   }
@@ -449,11 +448,11 @@ body {
   .topbar-wrap .topbar-glass {
     border-radius: 30px;
     padding: 0.65rem 0.8rem;
-    box-shadow: 0 14px 30px rgba(15, 20, 31, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    box-shadow: 0 14px 30px rgba(20, 45, 84, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.45);
   }
 
   :root[data-theme="dark"] .topbar-wrap .topbar-glass {
-    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.44), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   }
 
   .page-stage {
@@ -462,14 +461,14 @@ body {
 
   .page-stage > .rounded-2xl {
     border-radius: 30px !important;
-    border-color: rgba(184, 193, 205, 0.58) !important;
-    background: linear-gradient(148deg, rgba(255, 255, 255, 0.82), rgba(243, 246, 250, 0.72)) !important;
-    box-shadow: 0 18px 36px rgba(16, 22, 32, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.98) !important;
+    border-color: rgba(178, 214, 247, 0.72) !important;
+    background: linear-gradient(148deg, rgba(255, 255, 255, 0.72), rgba(231, 245, 255, 0.6)) !important;
+    box-shadow: 0 18px 36px rgba(33, 65, 112, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.94) !important;
   }
 
   :root[data-theme="dark"] .page-stage > .rounded-2xl {
-    border-color: rgba(255, 255, 255, 0.16) !important;
-    background: linear-gradient(148deg, rgba(20, 20, 21, 0.74), rgba(8, 8, 9, 0.72)) !important;
-    box-shadow: 0 20px 42px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+    border-color: rgba(255, 255, 255, 0.13) !important;
+    background: linear-gradient(148deg, rgba(15, 31, 70, 0.72), rgba(8, 16, 38, 0.68)) !important;
+    box-shadow: 0 20px 42px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
   }
 }

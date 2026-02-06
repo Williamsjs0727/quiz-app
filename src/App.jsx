@@ -477,7 +477,7 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", resolvedTheme);
-    const nextThemeColor = resolvedTheme === THEME_MODE_DARK ? "#0a0a0a" : "#ffffff";
+    const nextThemeColor = resolvedTheme === THEME_MODE_DARK ? "#081834" : "#d8efff";
     document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
       meta.setAttribute("content", nextThemeColor);
     });
@@ -1054,7 +1054,7 @@ function TopBar({
   onBackParticipant,
 }) {
   return (
-    <div className="topbar-wrap z-40 px-3 sm:px-4">
+    <div className="topbar-wrap sticky top-3 z-40 px-3 sm:px-4">
       <div className="topbar-glass mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="text-sm font-semibold tracking-wide">Realtime Quiz</div>
