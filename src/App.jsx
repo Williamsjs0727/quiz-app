@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ref, onValue, runTransaction, set, update } from "firebase/database";
-import { db, ensureAnonymousAuth } from "./firebase";
+import { db, ensureAnonymousAuth, firebaseInitErrorMessage, firebaseReady } from "./firebase";
 
 /** ========= 配置 ========= */
 const ADMIN_PASSWORD =
@@ -92,6 +92,9 @@ function randomId(len = 18) {
 function toFriendlyError(err, fallback) {
   const code = err?.code || "";
   const step = err?.dbStep ? `（步骤：${err.dbStep}）` : "";
+  if (code === "config/missing-firebase-env") {
+    return `Firebase 配置缺失：${err?.message || "请根据 .env.example 创建 .env.local"}${step}`;
+  }
   if (code === "PERMISSION_DENIED" || code.includes("permission-denied")) {
     return `权限不足：请确认 Firebase 匿名登录已开启、Database Rules 已发布，且 Realtime Database 的 App Check 未强制拦截。${step}`;
   }
@@ -353,6 +356,13 @@ export default function App() {
 
   /** 匿名认证：配合 RTDB rules（auth != null） */
   useEffect(() => {
+    if (!firebaseReady) {
+      setAuthReady(false);
+      setIsConnected(false);
+      setAuthError(`Firebase 配置缺失：${firebaseInitErrorMessage}`);
+      return;
+    }
+
     let active = true;
     ensureAnonymousAuth()
       .then(() => {
@@ -392,7 +402,7 @@ export default function App() {
 
   /** 订阅 DB */
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || !db) return;
     const rootRef = ref(db, "/");
     const unsub = onValue(
       rootRef,
@@ -477,7 +487,8 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", resolvedTheme);
-    const nextThemeColor = resolvedTheme === THEME_MODE_DARK ? "#081834" : "#d8efff";
+    const cssChromeTint = getComputedStyle(document.documentElement).getPropertyValue("--chrome-tint").trim();
+    const nextThemeColor = cssChromeTint || (resolvedTheme === THEME_MODE_DARK ? "#0b1f52" : "#deefff");
     document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
       meta.setAttribute("content", nextThemeColor);
     });
@@ -534,6 +545,13 @@ export default function App() {
   }, [leaderboardFinal, participantId]);
 
   async function runDbOp(label, operation) {
+    if (!db) {
+      const err = new Error(firebaseInitErrorMessage || "Firebase is not configured.");
+      err.code = "config/missing-firebase-env";
+      err.dbStep = label;
+      throw err;
+    }
+
     try {
       return await operation();
     } catch (err) {
@@ -1054,7 +1072,7 @@ function TopBar({
   onBackParticipant,
 }) {
   return (
-    <div className="topbar-wrap sticky top-3 z-40 px-3 sm:px-4">
+    <div className="topbar-wrap z-40 px-3 sm:px-4">
       <div className="topbar-glass mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="text-sm font-semibold tracking-wide">Realtime Quiz</div>

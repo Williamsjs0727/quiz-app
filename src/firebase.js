@@ -12,28 +12,43 @@ const requiredFirebaseEnvKeys = [
   "VITE_FIREBASE_APP_ID",
 ];
 
+function isMissingOrPlaceholder(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return !normalized || normalized === "change_me";
+}
+
 function readFirebaseConfigFromEnv() {
-  const missingKeys = requiredFirebaseEnvKeys.filter((key) => !import.meta.env[key]);
-  if (missingKeys.length > 0) {
-    throw new Error(
-      `Missing Firebase env vars: ${missingKeys.join(", ")}. Please create .env.local from .env.example.`
-    );
-  }
+  const missingKeys = requiredFirebaseEnvKeys.filter((key) => isMissingOrPlaceholder(import.meta.env[key]));
 
   return {
-    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-    databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
-    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    missingKeys,
+    config: {
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+      databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+      appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    },
   };
 }
 
-const app = initializeApp(readFirebaseConfigFromEnv());
-export const db = getDatabase(app);
-export const auth = getAuth(app);
+const { missingKeys: firebaseMissingEnvKeys, config: firebaseConfig } = readFirebaseConfigFromEnv();
+export { firebaseMissingEnvKeys };
+
+export const firebaseInitErrorMessage =
+  firebaseMissingEnvKeys.length > 0
+    ? `Missing Firebase env vars: ${firebaseMissingEnvKeys.join(
+        ", "
+      )}. Please create .env.local from .env.example.`
+    : "";
+
+export const firebaseReady = firebaseMissingEnvKeys.length === 0;
+
+const app = firebaseReady ? initializeApp(firebaseConfig) : null;
+export const db = app ? getDatabase(app) : null;
+export const auth = app ? getAuth(app) : null;
 
 let anonymousAuthPromise = null;
 
@@ -44,6 +59,12 @@ async function ensureUserToken(user, forceRefreshToken) {
 }
 
 export function ensureAnonymousAuth(forceRefreshToken = false) {
+  if (!auth) {
+    const err = new Error(firebaseInitErrorMessage || "Firebase is not configured.");
+    err.code = "config/missing-firebase-env";
+    return Promise.reject(err);
+  }
+
   if (auth.currentUser) {
     return ensureUserToken(auth.currentUser, forceRefreshToken);
   }

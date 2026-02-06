@@ -14,9 +14,9 @@
   --gradient-b: rgba(24, 194, 255, 0.34);
   --gradient-c: rgba(119, 81, 255, 0.26);
   --gradient-d: rgba(30, 39, 118, 0.38);
-  --chrome-tint: #081834;
-  --edge-top-rgb: 9, 26, 73;
-  --edge-bottom-rgb: 8, 18, 52;
+  --chrome-tint: #0b1f52;
+  --edge-top-rgb: 11, 31, 82;
+  --edge-bottom-rgb: 9, 22, 62;
   --surface-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 38%,
       rgba(0, 0, 0, 0.14));
   --nav-glass-bg: linear-gradient(135deg, rgba(20, 20, 24, 0.78), rgba(9, 9, 11, 0.72));
@@ -39,9 +39,9 @@
   --gradient-b: rgba(82, 220, 255, 0.33);
   --gradient-c: rgba(255, 255, 255, 0.8);
   --gradient-d: rgba(120, 154, 255, 0.26);
-  --chrome-tint: #d8efff;
-  --edge-top-rgb: 212, 237, 255;
-  --edge-bottom-rgb: 223, 241, 255;
+  --chrome-tint: #deefff;
+  --edge-top-rgb: 214, 236, 255;
+  --edge-bottom-rgb: 221, 240, 255;
   --surface-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.18) 34%,
       rgba(210, 232, 255, 0.38));
   --nav-glass-bg: linear-gradient(135deg, rgba(248, 253, 255, 0.82), rgba(224, 241, 255, 0.7));
@@ -92,38 +92,38 @@ body {
 
 .app-shell::before {
   content: "";
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), transparent 28%, rgba(255, 255, 255, 0.06));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 34%, rgba(255, 255, 255, 0.05));
   mix-blend-mode: soft-light;
-  opacity: 0.38;
+  opacity: 0.32;
 }
 
 .app-shell::after {
   content: "";
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   background: linear-gradient(
       180deg,
-      rgba(var(--edge-top-rgb), 0.86) 0%,
-      rgba(var(--edge-top-rgb), 0.52) 12%,
-      rgba(var(--edge-top-rgb), 0.16) 24%,
-      transparent 36%
+      rgba(var(--edge-top-rgb), 0.54) 0%,
+      rgba(var(--edge-top-rgb), 0.3) 12%,
+      rgba(var(--edge-top-rgb), 0.1) 24%,
+      transparent 40%
     ),
     linear-gradient(
       0deg,
-      rgba(var(--edge-bottom-rgb), 0.82) 0%,
-      rgba(var(--edge-bottom-rgb), 0.48) 10%,
-      rgba(var(--edge-bottom-rgb), 0.16) 20%,
-      transparent 33%
+      rgba(var(--edge-bottom-rgb), 0.5) 0%,
+      rgba(var(--edge-bottom-rgb), 0.28) 10%,
+      rgba(var(--edge-bottom-rgb), 0.1) 22%,
+      transparent 40%
     );
-  opacity: 0.48;
+  opacity: 0.36;
 }
 
 .app-gradient {
-  position: fixed;
+  position: absolute;
   inset: -34%;
   pointer-events: none;
   filter: blur(56px) saturate(128%);
@@ -151,10 +151,10 @@ body {
 }
 
 .app-noise {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.18;
+  opacity: 0.14;
   background-image: radial-gradient(rgba(255, 255, 255, 0.22) 0.6px, transparent 0.6px);
   background-size: 3px 3px;
   mix-blend-mode: soft-light;
@@ -215,7 +215,8 @@ body {
 }
 
 .topbar-wrap {
-  top: calc(env(safe-area-inset-top, 0px) + 10px) !important;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+  margin-bottom: 0.2rem;
 }
 
 .admin-library-shell {
@@ -334,7 +335,7 @@ body {
 }
 
 :root[data-theme="light"] .app-shell::after {
-  opacity: 0.72;
+  opacity: 0.54;
 }
 
 :root[data-theme="light"] .app-shell .bg-indigo-600 {
@@ -432,15 +433,15 @@ body {
   }
 
   .app-shell::after {
-    opacity: 0.58;
+    opacity: 0.44;
   }
 
   :root[data-theme="light"] .app-shell::after {
-    opacity: 0.78;
+    opacity: 0.58;
   }
 
   .topbar-wrap {
-    top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
     padding-left: 0.75rem;
     padding-right: 0.75rem;
   }
