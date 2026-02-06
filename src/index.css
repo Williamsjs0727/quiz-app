@@ -14,6 +14,9 @@
   --gradient-b: rgba(24, 194, 255, 0.34);
   --gradient-c: rgba(119, 81, 255, 0.26);
   --gradient-d: rgba(30, 39, 118, 0.38);
+  --chrome-tint: #081834;
+  --edge-top-rgb: 9, 26, 73;
+  --edge-bottom-rgb: 8, 18, 52;
   --surface-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 38%,
       rgba(0, 0, 0, 0.14));
   --nav-glass-bg: linear-gradient(135deg, rgba(20, 20, 24, 0.78), rgba(9, 9, 11, 0.72));
@@ -36,6 +39,9 @@
   --gradient-b: rgba(82, 220, 255, 0.33);
   --gradient-c: rgba(255, 255, 255, 0.8);
   --gradient-d: rgba(120, 154, 255, 0.26);
+  --chrome-tint: #d8efff;
+  --edge-top-rgb: 212, 237, 255;
+  --edge-bottom-rgb: 223, 241, 255;
   --surface-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.18) 34%,
       rgba(210, 232, 255, 0.38));
   --nav-glass-bg: linear-gradient(135deg, rgba(248, 253, 255, 0.82), rgba(224, 241, 255, 0.7));
@@ -53,6 +59,10 @@ body,
   min-height: 100%;
 }
 
+html {
+  background: var(--chrome-tint);
+}
+
 body {
   margin: 0;
   background: var(--bg-base);
@@ -60,6 +70,7 @@ body {
   font-family: "Outfit", "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  overscroll-behavior-y: none;
   transition: background-color 320ms ease, color 320ms ease;
 }
 
@@ -87,6 +98,28 @@ body {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), transparent 28%, rgba(255, 255, 255, 0.06));
   mix-blend-mode: soft-light;
   opacity: 0.38;
+}
+
+.app-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+      180deg,
+      rgba(var(--edge-top-rgb), 0.86) 0%,
+      rgba(var(--edge-top-rgb), 0.52) 12%,
+      rgba(var(--edge-top-rgb), 0.16) 24%,
+      transparent 36%
+    ),
+    linear-gradient(
+      0deg,
+      rgba(var(--edge-bottom-rgb), 0.82) 0%,
+      rgba(var(--edge-bottom-rgb), 0.48) 10%,
+      rgba(var(--edge-bottom-rgb), 0.16) 20%,
+      transparent 33%
+    );
+  opacity: 0.48;
 }
 
 .app-gradient {
@@ -300,6 +333,10 @@ body {
       rgba(172, 210, 248, 0.28));
 }
 
+:root[data-theme="light"] .app-shell::after {
+  opacity: 0.72;
+}
+
 :root[data-theme="light"] .app-shell .bg-indigo-600 {
   color: #f8fbff !important;
 }
@@ -379,6 +416,12 @@ body {
 }
 
 @media (max-width: 640px) {
+  html,
+  body,
+  #root {
+    min-height: 100svh;
+  }
+
   .app-shell {
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1.2rem);
   }
@@ -386,6 +429,14 @@ body {
   .app-gradient {
     inset: -46%;
     filter: blur(62px) saturate(142%);
+  }
+
+  .app-shell::after {
+    opacity: 0.58;
+  }
+
+  :root[data-theme="light"] .app-shell::after {
+    opacity: 0.78;
   }
 
   .topbar-wrap {

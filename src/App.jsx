@@ -477,10 +477,11 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", resolvedTheme);
-    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
-    if (themeColorMeta) {
-      themeColorMeta.setAttribute("content", resolvedTheme === THEME_MODE_DARK ? "#06112a" : "#dff0ff");
-    }
+    const nextThemeColor = resolvedTheme === THEME_MODE_DARK ? "#081834" : "#d8efff";
+    document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+      meta.setAttribute("content", nextThemeColor);
+    });
+    document.documentElement.style.colorScheme = resolvedTheme === THEME_MODE_DARK ? "dark" : "light";
   }, [resolvedTheme]);
 
   useEffect(() => {
