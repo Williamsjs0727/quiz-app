@@ -1,0 +1,131 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+
+    "session": {
+      "status": {
+        ".validate": "newData.val() === null || (newData.isString() && (newData.val() === 'running' || newData.val() === 'stopped'))"
+      },
+      "answerMode": {
+        ".validate": "newData.val() === null || (newData.isString() && (newData.val() === 'single' || newData.val() === 'all'))"
+      },
+      "stoppedAt": {
+        ".validate": "newData.val() === null || (newData.isNumber() && newData.val() > 0)"
+      },
+      "currentQuestionIndex": {
+        ".validate": "newData.val() === null || (newData.isNumber() && newData.val() >= 0 && newData.val() <= newData.parent().child('totalQuestions').val())"
+      },
+      "totalQuestions": {
+        ".validate": "newData.val() === null || (newData.isNumber() && newData.val() >= 1 && newData.val() <= 200)"
+      },
+      "updatedAt": {
+        ".validate": "newData.val() === null || (newData.isNumber() && newData.val() > 0)"
+      },
+      "$other": {
+        ".validate": false
+      }
+    },
+
+    "quizStatus": {
+      ".validate": "newData.val() === null || (newData.isString() && (newData.val() === 'running' || newData.val() === 'stopped'))"
+    },
+    "answerMode": {
+      ".validate": "newData.val() === null || (newData.isString() && (newData.val() === 'single' || newData.val() === 'all'))"
+    },
+    "stoppedAt": {
+      ".validate": "newData.val() === null || (newData.isNumber() && newData.val() > 0)"
+    },
+    "currentQuestionIndex": {
+      ".validate": "newData.val() === null || (newData.isNumber() && newData.val() >= 0 && newData.val() <= root.child('totalQuestions').val())"
+    },
+    "totalQuestions": {
+      ".validate": "newData.val() === null || (newData.isNumber() && newData.val() >= 1 && newData.val() <= 200)"
+    },
+
+    "users": {
+      "$participantId": {
+        "userName": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40"
+        },
+        "recoveryCode": {
+          ".validate": "newData.isString() && newData.val().matches(/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/)"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
+        ".validate": "newData.hasChildren(['userName', 'recoveryCode', 'createdAt'])",
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+
+    "userNameIndex": {
+      "$nameKey": {
+        ".validate": "newData.val() === null || (newData.isString() && newData.val().matches(/^p_[a-z0-9_]+$/))"
+      }
+    },
+
+    "recoveryCodeIndex": {
+      "$code": {
+        ".validate": "newData.val() === null || (newData.isString() && ((data.val() === null && (newData.val() === '__RESERVED__' || newData.val().matches(/^p_[a-z0-9_]+$/))) || (data.val() === '__RESERVED__' && newData.val().matches(/^p_[a-z0-9_]+$/)) || (data.exists() && data.val() === newData.val())))"
+      }
+    },
+
+    "deviceIndex": {
+      "$deviceId": {
+        ".validate": "newData.val() === null || (newData.isString() && newData.val().matches(/^p_[a-z0-9_]+$/))"
+      }
+    },
+
+    "userQuizStartTimes": {
+      "$participantId": {
+        ".validate": "newData.isNumber() && newData.val() > 0 && (!data.exists() || data.val() === newData.val())"
+      }
+    },
+
+    "startTimes": {
+      "$subKey": {
+        ".validate": "newData.isNumber() && newData.val() > 0 && (!data.exists() || data.val() === newData.val())"
+      }
+    },
+
+    "submissions": {
+      "$subKey": {
+        "participantId": {
+          ".validate": "newData.isString() && newData.val().matches(/^p_[a-z0-9_]+$/)"
+        },
+        "userName": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40"
+        },
+        "questionId": {
+          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= root.child('totalQuestions').val()"
+        },
+        "answer": {
+          ".validate": "newData.isString() && newData.val().matches(/^[A-D]$/)"
+        },
+        "isCorrect": {
+          ".validate": "newData.isBoolean()"
+        },
+        "startTime": {
+          ".validate": "newData.isNumber()"
+        },
+        "submitTime": {
+          ".validate": "newData.isNumber() && newData.val() >= newData.parent().child('startTime').val()"
+        },
+        "duration": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        ".validate": "newData.hasChildren(['participantId', 'userName', 'questionId', 'answer', 'isCorrect', 'startTime', 'submitTime', 'duration']) && (!data.exists() || data.val() === newData.val())",
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+
+    "$other": {
+      ".validate": false
+    }
+  }
+}
