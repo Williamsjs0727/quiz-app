@@ -477,6 +477,10 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", resolvedTheme);
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) {
+      themeColorMeta.setAttribute("content", resolvedTheme === THEME_MODE_DARK ? "#06112a" : "#dff0ff");
+    }
   }, [resolvedTheme]);
 
   useEffect(() => {
@@ -919,6 +923,7 @@ export default function App() {
       <div className="app-gradient app-gradient-a" />
       <div className="app-gradient app-gradient-b" />
       <div className="app-gradient app-gradient-c" />
+      <div className="app-gradient app-gradient-d" />
       <div className="app-noise" />
       <div className="relative z-10">
         <TopBar
@@ -1048,7 +1053,7 @@ function TopBar({
   onBackParticipant,
 }) {
   return (
-    <div className="sticky top-3 z-40 px-3 sm:px-4">
+    <div className="topbar-wrap sticky top-3 z-40 px-3 sm:px-4">
       <div className="topbar-glass mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="text-sm font-semibold tracking-wide">Realtime Quiz</div>
@@ -1254,7 +1259,7 @@ function EntryPage({
       : "进行中 / Running";
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-10">
+    <div className="page-stage mx-auto max-w-3xl px-3 py-6 sm:px-4 sm:py-10">
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -1370,7 +1375,7 @@ function AuthPage({ onBack, onRegister, onRecover }) {
   }
 
   return (
-    <div className="mx-auto max-w-lg px-4 py-10">
+    <div className="page-stage mx-auto max-w-lg px-3 py-6 sm:px-4 sm:py-10">
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-xl font-bold">注册 / 找回</h2>
@@ -1495,7 +1500,7 @@ function QuizPage({ data, participantId, user, currentQuestion, totalQuestions, 
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-10">
+    <div className="page-stage mx-auto max-w-3xl px-3 py-6 sm:px-4 sm:py-10">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-sm text-slate-300">
           用户：<span className="font-semibold">{user?.userName || "-"}</span>
@@ -1680,7 +1685,7 @@ function QuizAllPage({ data, participantId, user, questions, onSubmitAll, onExit
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-10">
+    <div className="page-stage mx-auto max-w-5xl px-3 py-6 sm:px-4 sm:py-10">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-sm text-slate-300">
           用户：<span className="font-semibold">{user?.userName || "-"}</span>
@@ -1818,7 +1823,7 @@ function EndPage({ kind, answerMode, leaderboard, myRow, totalQuestions, onExit 
     : "最终榜单：正确率↓，总耗时↑（从进入答题页到完成/Stop 的总时长）。";
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-10">
+    <div className="page-stage mx-auto max-w-5xl px-3 py-6 sm:px-4 sm:py-10">
       <div className="mb-4 flex items-center justify-end">
         <button
           onClick={onExit}
